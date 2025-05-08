@@ -1,0 +1,4976 @@
+---
+title: "CCRVB-39: Franchini VB043B HTLV chimera (Sarkis) - FOR MS"
+author: "Kate Goldfarbmuren"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    toc: FALSE
+editor_options:
+  chunk_output_type: console
+params:
+  study_name: "ccrvb39_VB043B_HTLVchimera_sarkis"
+  #   ##### where is the data on biowulf
+  parent_dir: "~/../../Volumes/NCI_VB/franchini/ccrvb39_VB043B_HTLVchimera_sarkis_KCG/trimmedForMS_Sept2024"
+  input_dir: "~/../../Volumes/NCI_VB/franchini/ccrvb39_VB043B_HTLVchimera_sarkis_KCG/trimmedForMS_Sept2024/input_data"
+
+
+  #   ##### where is the data local
+  # parent_dir: "/Users/goldfarbmurenkc/Documents/VeffaFranchini/ccrvb39_VB043B_HTLVchimera_sarkis/ccrvb39_forBiowulfDown_20240919"
+  # input_dir: "/Users/goldfarbmurenkc/Documents/VeffaFranchini/ccrvb39_VB043B_HTLVchimera_sarkis/ccrvb39_forBiowulfDown_20240919/input_data"
+  
+ 
+ #### should evaluate Fig 2 viral scores or skip?
+  eval_Fig2: TRUE
+  # ### WT batch(es) to use
+  # batchA_to_use: !r c("batch2") #!r c("batch1","batch2")
+  # ### AC batch(es) to use
+  # batchC_to_use: !r c("batch1","batch2") #!r c("batch1","batch2")
+ 
+  ##### should evaluate the corr calcs or are these already done?
+  eval_corr_calcs: TRUE
+  ##### should evaluate the eulers or are these already done?
+  eval_euler_plotting: TRUE #trimmed down this function to not take so long
+  
+  pval_cutoff: "0.05" 
+  png_or_pdf: "png" #png or cairo_pdf for weird fonts
+  lib_loc_to_use: "/data/goldfarbmurenkc/R/rhel8/4.3/"
+
+---
+
+
+```{r setup, include=FALSE}
+png_or_pdf <- params$png_or_pdf
+knitr::opts_chunk$set(echo = FALSE, 
+                      fig.width = 7, 
+                      fig.height = 7, 
+                      dev = png_or_pdf,
+                      #dpi = 400,
+                      cache = FALSE,
+                      warning = FALSE,
+                      message = FALSE)
+
+#https://github.com/rstudio/DT/issues/867
+DT::datatable(
+  matrix(), extensions="Buttons",
+  options = list(dom = 'Blfrtip',
+                 buttons = c('copy', 'csv', 'excel', 'pdf', 'print'),
+                 iDisplayLength = 25,
+                 lengthMenu = list(c(10,25,50,-1),
+                                             c(10,25,50,"All")))
+)
+     
+
+eval_corr_calcs <- params$eval_corr_calcs                  
+eval_euler_plotting <- params$eval_euler_plotting  
+eval_Fig2 <- params$eval_Fig2
+```
+
+
+```{r generate_dirs, warning=FALSE, include=FALSE}
+############################################################
+# generate dirs
+############################################################
+parent_dir <- params$parent_dir
+input_dir <- params$input_dir
+
+
+outputIMAGES_dir = file.path(parent_dir,"IMAGES")
+outputTABLES_dir = file.path(parent_dir,"TABLES")
+outputRData_dir = file.path(parent_dir,"RData")
+outputEnrichr_dir = file.path(parent_dir,"Enrichr")
+output_dirs <- c(outputIMAGES_dir, outputTABLES_dir, outputRData_dir, outputEnrichr_dir)
+
+for (curr_dir in output_dirs){
+  if(!(file.exists(file.path(curr_dir)))){
+    dir.create(file.path(curr_dir), showWarnings = TRUE)
+  }
+}
+
+```
+
+```{r source_pkgs, warning=FALSE, include=FALSE}
+############################################################
+# packages & functions
+############################################################
+# package list
+
+list.of.packages=c("openxlsx","readxl", "tidyverse","cowplot", "pheatmap","dendsort","ggpubr","stringr","knitr","broom","kableExtra","gtsummary",
+"gridExtra","DT","downloadthis","ggbeeswarm","ggrepel","plotly","ggplotify","flextable","officer",
+"RColorBrewer","colorspace","corrplot","factoextra","data.table",
+"strex","pander","plotly","ggalluvial","MESS","geepack","janitor","rstatix")
+
+#install as needed
+new.packages <- list.of.packages[!(list.of.packages %in% installed.packages()[,"Package"])]
+if(length(new.packages)) BiocManager::install(new.packages)
+
+
+# load packages
+invisible(lapply(list.of.packages, library, character.only = TRUE))
+#extrafont::loadfonts(quiet = TRUE)
+```
+
+```{r loadData}
+### get tab names
+xlsx_file_path <- file.path(input_dir,"ccrvb39_batch1and2_RAW_datasets.xlsx")
+tab_names<-openxlsx::getSheetNames(xlsx_file_path)
+### list with separate element for each tab
+list_of_datasets <- lapply(tab_names,
+                           openxlsx::read.xlsx,xlsxFile=xlsx_file_path)
+names(list_of_datasets) <- tab_names
+
+```
+
+```{r processData}
+
+##### first format the processed the blood/BAL FACS data for batch 1
+### for DC tabs
+DC_df <- data.frame()
+for(curr_tab in names(list_of_datasets)[grepl(" DC",names(list_of_datasets))]){
+  curr_df <- list_of_datasets[[paste0(curr_tab)]][,c(1,11:18)] %>% ### only collect the frequencies, not the raw cell counts
+    ### rename column 1
+    dplyr::rename(rowname=1) %>%
+    ### collect Animal_ID, Time, Compartment
+    dplyr::mutate(Animal_ID = str_before_last(str_after_last(rowname," "),".fcs"),
+                  rowname = str_remove_all(rowname,"_5"),
+                  Time = ifelse(grepl("5 ",rowname),"Week_05",
+                                ifelse(grepl("12 ",rowname),"Week_12",
+                                       "Week_21")),
+                  Compartment = ifelse(grepl("BAL",rowname),"BAL","Blood"),
+                  Batch = "batch1",
+                  rowname = NULL ### remove since now useless
+                  ) %>%
+    ### make longer
+    tidyr::pivot_longer(cols = !c(Animal_ID,Time,Compartment,Batch), names_to = "variable", values_to = "amount") %>%
+    ### fix variable names
+    dplyr::mutate(variable = ifelse(grepl("\\.",variable),paste0("pDC_",str_before_first(variable,"\\.")),
+                                    ifelse(variable %in% c("mDC","pDC"),variable,paste0("mDC_",variable))),
+                  variable = str_remove_all(variable,"-"),
+                  amount = as.numeric(amount)) %>%
+    ## sort to be sure columns in same order
+    dplyr::arrange(variable) %>%
+    ### make wider
+    tidyr::pivot_wider(names_from = "variable", values_from = "amount")
+    
+  DC_df <- rbind(DC_df, curr_df)
+}
+
+
+### for monocytes tabs
+monocytes_df <- data.frame()
+for(curr_tab in names(list_of_datasets)[grepl("monocytes",names(list_of_datasets))]){
+  curr_df <- list_of_datasets[[paste0(curr_tab)]][,c("X1",colnames(list_of_datasets[[paste0(curr_tab)]])[grepl("%",list_of_datasets[[paste0(curr_tab)]])])] %>% ### only collect the frequencies, not the raw cell counts
+    ### rename column 1
+    dplyr::rename(rowname=1) %>%
+    ### remove duplicate name row
+    dplyr::filter(!is.na(rowname)) %>%
+    ### collect Animal_ID, Time, Compartment
+    dplyr::mutate(Animal_ID = str_before_last(str_after_last(rowname," "),".fcs"),
+                  rowname = str_remove_all(rowname,"_5"),
+                  Time = ifelse(grepl("5 ",rowname),"Week_05",
+                                ifelse(grepl("12 ",rowname),"Week_12",
+                                       "Week_21")),
+                  Compartment = ifelse(grepl("BAL",rowname),"BAL","Blood"),
+                  Batch = "batch1",
+                  rowname = NULL ### remove since now useless
+                  ) %>%
+    ### make longer
+    tidyr::pivot_longer(cols = !c(Animal_ID,Time,Compartment,Batch), names_to = "variable", values_to = "amount") %>%
+    ### fix variable names
+    dplyr::mutate(variable = str_replace_all(variable,"%","Pct_"),
+                  variable = str_replace_all(variable,"\\.","_"),
+                  variable = str_replace_all(variable,"MacrophagesIL","Macrophages_IL"),
+                  variable = str_replace_all(variable,"Cd162","CD162"),
+                  variable = str_replace_all(variable,"CD162","CD162_"),
+                  variable = str_remove_all(variable,"\\+"),
+                  variable = str_remove_all(variable,"-"),
+                  amount = as.numeric(amount)) %>%
+    ## sort to be sure columns in same order
+    dplyr::arrange(variable) %>%
+    ### make wider
+    tidyr::pivot_wider(names_from = "variable", values_from = "amount")
+    
+  monocytes_df <- rbind(monocytes_df, curr_df)
+}
+
+
+### for neutrophil tabs
+neutrophil_df <- data.frame()
+for(curr_tab in names(list_of_datasets)[grepl("neutrophil",names(list_of_datasets))]){
+  curr_df <- list_of_datasets[[paste0(curr_tab)]][,c("X1",colnames(list_of_datasets[[paste0(curr_tab)]])[grepl("%",list_of_datasets[[paste0(curr_tab)]])])] %>% ### only collect the frequencies, not the raw cell counts
+    ### rename column 1
+    dplyr::rename(rowname=1) %>%
+    ### remove duplicate name row
+    dplyr::filter(!is.na(rowname)) %>%
+    ### collect Animal_ID, Time, Compartment
+    dplyr::mutate(Animal_ID = str_before_last(str_after_last(rowname," "),".fcs"),
+                  rowname = str_remove_all(rowname,"_5"),
+                  Time = ifelse(grepl("5 ",rowname),"Week_05",
+                                ifelse(grepl("12 ",rowname),"Week_12",
+                                       "Week_21")),
+                  Compartment = ifelse(grepl("BAL",rowname),"BAL","Blood"),
+                  Batch = "batch1",
+                  rowname = NULL ### remove since now useless
+                  ) %>%
+    ### make longer
+    tidyr::pivot_longer(cols = !c(Animal_ID,Time,Compartment,Batch), names_to = "variable", values_to = "amount") %>%
+    ### fix variable names
+    dplyr::mutate(variable = str_replace_all(variable,"%","Pct_"),
+                  variable = str_replace_all(variable,"\\.","_"),
+                  variable = ifelse(grepl("Neutrophil",variable),variable,paste0(variable,"_Neutrophil")),
+                  variable = str_replace_all(variable,"CD162","CD162_"),
+                  variable = str_remove_all(variable,"\\+"),
+                  variable = str_remove_all(variable,"-"),
+                  variable = str_replace_all(variable,"__","_"),
+                  amount = as.numeric(amount)) %>%
+    ## sort to be sure columns in same order
+    dplyr::arrange(variable) %>%
+    ### make wider
+    tidyr::pivot_wider(names_from = "variable", values_from = "amount")
+    
+  neutrophil_df <- rbind(neutrophil_df, curr_df)
+}
+
+
+
+
+#### set variables in each dataset
+meta_vars_short <- c("Animal_ID","Treatment","Virus","Time","Compartment","Batch")
+
+
+VL_columns <- setdiff(colnames(list_of_datasets[["Virus_variables"]]),c(meta_vars_short,"p24_titer_orig")) ## don't include orig in general analysis, just in direct comparison
+cellpop_columns <-setdiff(colnames(list_of_datasets[["FACS_variables"]]),meta_vars_short)
+DC_columns <- setdiff(colnames(DC_df),meta_vars_short)
+monocyte_columns <- setdiff(colnames(monocytes_df),meta_vars_short)
+neutrophil_columns <- setdiff(colnames(neutrophil_df),meta_vars_short)
+cytokine_columns <- setdiff(colnames(list_of_datasets[["Olink_variables"]]),meta_vars_short)
+num_data_columns <- c(VL_columns,
+                      cellpop_columns,
+                      DC_columns,
+                      monocyte_columns,
+                      neutrophil_columns,
+                      cytokine_columns)
+
+
+
+
+### collect treatment/virus for each animal
+animal_treat_virus_df <-  unique(list_of_datasets[["Virus_variables"]][,c("Animal_ID","Treatment","Virus")])
+
+  ####### now make true long to combine
+phen_long <- list_of_datasets[["Virus_variables"]] %>%
+  pivot_longer(cols = !c(!!!rlang::syms(meta_vars_short)), names_to = "variable", values_to = "amount") %>%
+  ### add FACS
+  dplyr::full_join(list_of_datasets[["FACS_variables"]] %>%
+                     pivot_longer(cols = !c(!!!rlang::syms(meta_vars_short)), names_to = "variable", values_to = "amount"),
+                   by = c(meta_vars_short,"variable","amount")) %>%
+  ### add olink
+  dplyr::full_join(list_of_datasets[["Olink_variables"]] %>%
+                     pivot_longer(cols = !c(!!!rlang::syms(meta_vars_short)), names_to = "variable", values_to = "amount"),
+                   by = c(meta_vars_short,"variable","amount")) %>%
+  ### add DC batch1
+  dplyr::full_join(DC_df %>%
+                     ### add treatment & virus
+                     dplyr::left_join(animal_treat_virus_df, by = "Animal_ID") %>%
+                     pivot_longer(cols = !c(!!!rlang::syms(meta_vars_short)), names_to = "variable", values_to = "amount"),
+                   by = c(meta_vars_short,"variable","amount")) %>%
+  
+  ### add DC batch2
+   dplyr::full_join(list_of_datasets[["DC_batch2"]] %>%
+                     pivot_longer(cols = !c(!!!rlang::syms(meta_vars_short)), names_to = "variable", values_to = "amount"),
+                   by = c(meta_vars_short,"variable","amount")) %>%
+    ### add monocytes
+  dplyr::full_join(monocytes_df %>%
+                     ### add treatment & virus
+                     dplyr::left_join(animal_treat_virus_df, by = "Animal_ID") %>%
+                     pivot_longer(cols = !c(!!!rlang::syms(meta_vars_short)), names_to = "variable", values_to = "amount"),
+                   by = c(meta_vars_short,"variable","amount")) %>%
+  
+    ### add monocytes batch2
+   dplyr::full_join(list_of_datasets[["Monocytes_batch2"]] %>%
+                     pivot_longer(cols = !c(!!!rlang::syms(meta_vars_short)), names_to = "variable", values_to = "amount"),
+                   by = c(meta_vars_short,"variable","amount")) %>%
+
+    ### add neutrophil
+  dplyr::full_join(neutrophil_df %>%
+                     ### add treatment & virus
+                     dplyr::left_join(animal_treat_virus_df, by = "Animal_ID") %>%
+                     pivot_longer(cols = !c(!!!rlang::syms(meta_vars_short)), names_to = "variable", values_to = "amount"),
+                   by = c(meta_vars_short,"variable","amount")) %>%
+      ### add neutrophil batch2
+   dplyr::full_join(list_of_datasets[["Neutrophil_batch2"]] %>%
+                     pivot_longer(cols = !c(!!!rlang::syms(meta_vars_short)), names_to = "variable", values_to = "amount"),
+                   by = c(meta_vars_short,"variable","amount")) %>%
+  
+  ### fix typos, adjust for new Baseline naming (used to be week00)
+  dplyr::mutate(TimePoint = str_replace_all(str_remove_all(Time," "), "Baseline","week00"),
+         ### also convert to weekXX not Week_XX format
+         TimePoint = str_replace_all(TimePoint,"Week_","week"),
+         TimePoint = str_replace_all(TimePoint,"Day","day"),
+         #### add Group
+         Group = ifelse(Virus == "HTLV-1ACoI-L",paste0(Treatment,"__m1AC"),paste0(Treatment,"__WT")),
+           #### add Treatment_virus_compartment
+         Treatment_virus_compartment = paste0(Treatment, "__", Virus,"__",Compartment),
+         Treatment_virus = paste0(Treatment, "__", Virus)
+         
+         ) %>%
+  ### for fold change need to add small prior to the cell populations (which can be zero), but not to the olink (which has a min threshold)
+  dplyr::mutate(amount_plus = ifelse(variable %in% cytokine_columns, amount, amount + 0.0001),
+         weeks_n = ifelse(grepl("week",TimePoint),as.numeric(str_after_first(TimePoint, "week")),as.numeric(0.1))) %>%
+  arrange(Animal_ID, variable, weeks_n) %>%
+  group_by(Animal_ID, variable, Compartment) %>%
+  dplyr::mutate(FC = 100*(amount_plus / amount_plus[1L])) %>%
+  ungroup() 
+
+#### make wide too
+data_df <- phen_long %>%
+  ### take only the amount and metadata
+  dplyr::select(c(!!!rlang::syms(meta_vars_short),Treatment_virus_compartment,Treatment_virus,variable,amount)) %>%
+  tidyr::pivot_wider(names_from = "variable", values_from = "amount") %>%
+  ## sort
+  dplyr::arrange(Treatment_virus_compartment,Animal_ID)
+
+
+metadata_columns <- setdiff(colnames(data_df),c(num_data_columns,"p24_titer_orig"))
+
+
+
+#### setup to store plotted values & stats
+list_of_plotted <- list()
+list_of_stats <- list()
+
+```
+
+# {.tabset}
+
+
+
+
+```{r prep_CellSubsets_WTbatch1a2combo__virusVariables}
+######### trim to the WT batch1 & batch2 
+data_df_to_use <- data_df %>%
+  dplyr::filter(Virus == "HTLV-1ACoI-L" & Batch %in% c("batch1","batch2") |
+                  Virus == "HTLV-1A_WT" & Batch %in% c("batch1","batch2"))
+name_for_wtBatch <- "WT batch 1 & 2 combined"
+shortName_for_wtBatch <- "" ## no name needed since WT1a2 for all analyses 
+
+#### WT first then DV1
+shape_values_to_use <- c(21,22,23,25,24,1,0,5,2,6,
+                         21,22,23,25,2)
+
+uniqueAnimal_ID <- "TKM"
+virus_factor_levels <- c("HTLV-1ACoI-L","HTLV-1A_WT")
+virus_colors <- c("seagreen4","palegreen")
+
+```
+
+## Virus Variables/Viral Score (Fig 2)  {.tabset}
+
+
+```{r levels_3Group_MW_setup}
+
+# Within each timepoint, which assays are different between treatment/virus groups?
+# 
+# *Mann-Whitney/Wilcoxon test among levels for each pairwise group comparison*
+
+### Fig panel 
+name_to_use <- paste0("Fig2c_",shortName_for_wtBatch)
+levels_or_FC <- "levels"
+
+ 
+  ### set up contrast dataframe group2 vs group1
+groups_to_compare <- data.frame("group1"=c("Triple_depletion__HTLV-1A_WT","No_depletion__HTLV-1ACoI-L","No_depletion__HTLV-1ACoI-L"),                            
+                                  "group2"=c("Triple_depletion__HTLV-1ACoI-L","Triple_depletion__HTLV-1ACoI-L","Triple_depletion__HTLV-1A_WT"),
+                                  "name"=c("TriMutvsTriWT","TriMutvsNoMut","TriWTvsNoMut"))
+#### set order for treatment_virus
+treat_virus_factor_levels <- c("Triple_depletion__HTLV-1ACoI-L","No_depletion__HTLV-1ACoI-L","Triple_depletion__HTLV-1A_WT","No_depletion__HTLV-1A_WT")
+```
+
+``` {r MW_3Group_fxn}
+
+MW_3Group_fxn <- function(tmp, name_to_use,levels_or_FC){
+  ### tmp is the inverted wide df with each variable being tested in rows and columns = animal_ID
+  ### NOTE tmp should already be trimmed to the compartment such that 3 groups are the only variable to test across (for each timepoint)
+  ### perform the unpaired by group comparison test
+  
+  ## curr_df only has the variables in columns and the factorized group (plus any other covariates if they are in the model)
+  full_df <- data.frame(t(tmp)) %>%
+    rownames_to_column("Animal_ID") %>%
+    dplyr::left_join(data.frame(unique(data_df_to_use[,c("Animal_ID","Treatment_virus")])) , by = "Animal_ID") %>%
+    column_to_rownames("Animal_ID") %>%
+    ### factorize group
+    dplyr::mutate(Group_f = factor(Treatment_virus, treat_virus_factor_levels),
+                  Treatment_virus = NULL)
+  
+  
+   
+  
+  p_value_df1 <- data.frame("rowname"=colnames(full_df)) %>%
+    dplyr::filter(rowname != "Group_f")
+  
+  
+  for (g in 1:nrow(groups_to_compare)){
+    
+       
+      p_value_df <- data.frame()
+      
+         ###### only if you have both groups
+    if(length(which(full_df$Group_f == groups_to_compare$group1[g])) != 0 &
+       length(which(full_df$Group_f == groups_to_compare$group2[g])) != 0){
+
+      
+      ## wilcoxon for pairwise differences
+      
+      ## generate matrix with only variables for stats 
+      Assay_mat <- as.matrix(full_df[,p_value_df1$rowname])
+      
+      ## kruskal test for if there are differences between any groups - not necessary since only 2 groups with these timepoints
+      # kruskal_p_raw <- apply(Assay_mat, 2, function(x) kruskal.test(x ~ Group_f, data = full_df)$p.value)
+      # kruskal_p_adj <- p.adjust(kruskal_p_raw, method = 'BH')
+      
+      
+      
+      
+      ## if there are no NAs for the group comparison (i.e. we have animals in both groups for the assay/timepoint)
+      if(length(which(is.na(Assay_mat[rownames(full_df)[which(full_df$Group_f == groups_to_compare$group1[g] | 
+                                                              full_df$Group_f == groups_to_compare$group2[g])]
+                                      ,]))) == 0)
+        #then calculate as usual
+      {
+        curr_p_raw <- apply(Assay_mat, 2, function(x) wilcox.test(x[Group_f %in% c(
+          groups_to_compare$group1[g], groups_to_compare$group2[g])] ~ Group_f[Group_f %in% c(
+            groups_to_compare$group1[g], groups_to_compare$group2[g])], data = full_df)$p.value)
+        curr_p_adj <- p.adjust(curr_p_raw, method = 'BH') 
+        ##### since have zeros, can't use the wilcox function
+        # curr_est <- apply(Assay_mat, 2, function(x) wilcox.test(x[Group_f %in% c(
+        #   groups_to_compare$group1[g], groups_to_compare$group2[g])] ~ Group_f[Group_f %in% c(
+        #     groups_to_compare$group1[g], groups_to_compare$group2[g])], data = full_df, conf.int = TRUE)$estimate)
+        #### https://aakinshin.net/posts/r-hodges-lehmann-problems/
+        
+        ###### first define function
+        hl <- function(x, y = NULL) {
+          if (is.null(y)) {
+            walsh <- outer(x, x, "+") / 2
+            median(walsh[lower.tri(walsh, diag = TRUE)], na.rm = TRUE)
+          } else {
+            median(outer(x, y, "-"), na.rm = TRUE)
+          }
+        }
+        
+        #### then generate the vector
+        curr_est <- c()
+        for(i in colnames(Assay_mat)){
+          x <- full_df[which(full_df$Group_f == groups_to_compare$group2[g]),i]
+          y <- full_df[which(full_df$Group_f == groups_to_compare$group1[g]),i]
+          ce <- hl(x, y)
+          names(ce) <- i
+          curr_est <- c(curr_est,ce)
+        }
+        
+        
+        #### combine to df
+        
+        curr_p_df <- data.frame(curr_p_raw, curr_p_adj, curr_est) %>%
+          rownames_to_column() 
+        colnames(curr_p_df) <- c("rowname",
+                                 
+                                 paste0(groups_to_compare$name[g],"_p_raw"),
+                                 paste0(groups_to_compare$name[g],"_p_adj"),
+                                 paste0(groups_to_compare$name[g],"_est"))
+        
+        ## but if there are all NAs for a group (i.e. one of the groups is missing the assay/timepoint), remove rows from Assay mat that have NAs (i.e. assay/timepoints that only have one of the groups to compare)
+      } else {
+        ### removes column if rows have NAs
+        #new_curr_df <- full_df[,colSums(is.na(full_df))==0] %>%
+        #  column_to_rownames("ID")
+        
+        ## since a few assays have a stray NA in the one group
+        ### trim to only the groups being compared
+        trim_df1 <- full_df[which(full_df$Group_f == groups_to_compare$group1[g]),] #%>% dplyr::select(-Group_f)
+        columns_with_noNAs1 <- colnames(trim_df1)[which(colSums(is.na(trim_df1)) == 0)]
+        columns_with_someNAs1 <- colnames(trim_df1)[which(colSums(is.na(trim_df1)) > 0 & colSums(is.na(trim_df1)) < dim(trim_df1)[1])]
+        columns_with_allNAs1 <- colnames(trim_df1)[which(colSums(is.na(trim_df1)) == dim(trim_df1)[1])]
+   
+        
+        trim_df2 <- full_df[which(full_df$Group_f == groups_to_compare$group2[g]),] #%>% dplyr::select(-Group_f)
+        columns_with_noNAs2 <- colnames(trim_df2)[which(colSums(is.na(trim_df2)) == 0)]
+        columns_with_someNAs2 <- colnames(trim_df2)[which(colSums(is.na(trim_df2)) > 0 & colSums(is.na(trim_df2)) < dim(trim_df2)[1])]
+        columns_with_allNAs2 <- colnames(trim_df2)[which(colSums(is.na(trim_df2)) == dim(trim_df2)[1])]
+     
+        #### if there are any columns with data for both groups
+        if(length(intersect(c(columns_with_noNAs1,columns_with_someNAs1),c(columns_with_noNAs2,columns_with_someNAs2))) > 1){
+          
+          new_curr_df <- full_df[,intersect(c(columns_with_noNAs1,columns_with_someNAs1),c(columns_with_noNAs2,columns_with_someNAs2))] %>%
+            ### also remove rows will all NA data, can't calculate est
+            filter(if_any(!Group_f, ~ !is.na(.)))
+          new_Assay_mat <- data.matrix(new_curr_df[,-which(colnames(new_curr_df) == "Group_f")])
+          curr_p_raw <- apply(new_Assay_mat, 2, function(x) wilcox.test(x[Group_f %in% c(
+            groups_to_compare$group1[g], groups_to_compare$group2[g])] ~ Group_f[Group_f %in% c(
+              groups_to_compare$group1[g], groups_to_compare$group2[g])], data = new_curr_df)$p.value)
+          curr_p_adj <- p.adjust(curr_p_raw, method = 'BH') 
+          # curr_est <- apply(new_Assay_mat, 2, function(x) wilcox.test(x[Group_f %in% c(
+          #    groups_to_compare$group1[g], groups_to_compare$group2[g])] ~ Group_f[Group_f %in% c(
+          #      groups_to_compare$group1[g], groups_to_compare$group2[g])], data = new_curr_df, conf.int = TRUE)$estimate)
+          
+          ###### first define function
+          hl <- function(x, y = NULL) {
+            if (is.null(y)) {
+              walsh <- outer(x, x, "+") / 2
+              median(walsh[lower.tri(walsh, diag = TRUE)], na.rm = TRUE)
+            } else {
+              median(outer(x, y, "-"), na.rm = TRUE)
+            }
+          }
+          
+          #### then generate the vector
+          curr_est <- c()
+          for(i in colnames(new_Assay_mat)){
+            x <- new_curr_df[which(new_curr_df$Group_f == groups_to_compare$group2[g]),i]
+            y <- new_curr_df[which(new_curr_df$Group_f == groups_to_compare$group1[g]),i]
+            ce <- hl(x, y)
+            names(ce) <- i
+            curr_est <- c(curr_est,ce)
+          }
+          
+          
+          #### combine to df
+          
+          curr_p_df <- data.frame(curr_p_raw, curr_p_adj, curr_est) %>%
+            rownames_to_column() 
+          colnames(curr_p_df) <- c("rowname",
+                                   
+                                   paste0(groups_to_compare$name[g],"_p_raw"),
+                                   paste0(groups_to_compare$name[g],"_p_adj"),
+                                   paste0(groups_to_compare$name[g],"_est"))
+          
+          
+        }else{
+          #### so that these definitely don't get carried over
+          curr_p_raw <- NA
+          curr_p_adj <- NA
+          curr_est <- NA
+          
+          #### combine to df
+          
+          curr_p_df <- data.frame(matrix(nrow=0, ncol=4))
+          colnames(curr_p_df) <- c("rowname",
+                                   
+                                   paste0(groups_to_compare$name[g],"_p_raw"),
+                                   paste0(groups_to_compare$name[g],"_p_adj"),
+                                   paste0(groups_to_compare$name[g],"_est"))
+          curr_p_df$rowname <- as.character(curr_p_df$rowname)
+          
+        }
+        
+      }
+      
+      
+    }else{
+      #### so that these definitely don't get carried over
+      curr_p_raw <- NA
+      curr_p_adj <- NA
+      curr_est <- NA
+      
+      #### combine to df
+      
+      curr_p_df <- data.frame(matrix(nrow=0, ncol=4))
+      colnames(curr_p_df) <- c("rowname",
+                               
+                               paste0(groups_to_compare$name[g],"_p_raw"),
+                               paste0(groups_to_compare$name[g],"_p_adj"),
+                               paste0(groups_to_compare$name[g],"_est"))
+      curr_p_df$rowname <- as.character(curr_p_df$rowname)
+      
+    }
+    
+    p_value_df <- rbind(p_value_df, curr_p_df)
+    #### needs to be character for full join
+    p_value_df$rowname <- as.character(p_value_df$rowname)
+    
+    
+    
+    p_value_df1 <- dplyr::full_join(p_value_df1, p_value_df, by="rowname") 
+    
+    
+    
+    
+    
+  }
+  
+  
+  
+    
+    ## format p values
+ p_value_df1 <- p_value_df1 %>%
+    column_to_rownames() %>%
+    ## set sig figs
+    mutate_all(signif, 2) %>%
+   rownames_to_column()
+  
+
+  
+   
+ ## add up/down with sig columns 
+  for(curr_comp in groups_to_compare$name){
+    curr_df <- p_value_df1[,c("rowname",colnames(p_value_df1)[grepl(curr_comp,colnames(p_value_df1))])] %>%
+      `colnames<-`(c("rowname","p_raw","p_adj","est")) %>%
+      dplyr::mutate(dir = ifelse(p_raw < 0.05, ifelse(est > 0, "up, p < 0.05","down, p < 0.05"),
+                                      ifelse(p_raw < 0.1, ifelse(est > 0, "up, p < 0.1","down, p < 0.1"),
+                                             ifelse(p_raw>0.05,"not_sig","no_test")))) %>%
+      dplyr::select(-c(p_raw,p_adj,est)) %>%
+      `colnames<-`(c("rowname",paste0(curr_comp,"_dir")))
+    
+     p_value_df1 <- dplyr::left_join(p_value_df1, curr_df, by = "rowname")
+    
+  }
+  
+  
+    ## format p values
+ p_value_df1 <- p_value_df1 %>%
+    column_to_rownames() 
+
+  
+  
+  ### save pvalues, NOTE NEED THE << to assign fromwithin the function
+ 
+ list_of_stats[[paste0(name_to_use,"_",levels_or_FC)]] <<- p_value_df1 %>%
+   rownames_to_column("variable_time")
+ 
+
+ 
+
+}
+
+  
+```
+
+### Fig 2c heatmap 
+
+``` {r Fig2c_heatmap, results = 'asis', fig.height = 10, fig.width = 8, eval = eval_Fig2}
+###trim to only the virus related columns
+dataVL <- data_df_to_use[,c(metadata_columns,VL_columns)] %>%
+  ### remove rows with NA in all VL columns
+  dplyr::filter_at(vars(!!!rlang::syms(VL_columns)), any_vars(!is.na(.)))
+
+#### tmp is dataframe for heatmap, columns are samples, rows are variables including timepoint
+tmp1 <- dataVL[,c("Animal_ID","Time",VL_columns)] %>%
+  ### first pivot longer to combine timepoint and VL columns
+  tidyr::pivot_longer(cols = all_of(VL_columns), names_to = "variable",values_to = "value") %>%
+  dplyr::mutate(value = ifelse(variable == "p24_titer",log10(value),value)) ###log10 of titer
+  #### add cumulative non-zero
+tmp <- tmp1 %>% 
+  group_by(Animal_ID,variable) %>%
+  dplyr::summarise(Time = paste0("wks_notZero"),
+            value = length(which(value != 0))) %>%
+  bind_rows(tmp1, .) %>%
+  dplyr::mutate(var_time = paste0(variable,"__",Time),
+                variable = NULL,
+                Time = NULL) %>%
+  ### pivot wider
+  tidyr::pivot_wider(names_from = "Animal_ID", values_from = "value") %>%
+  column_to_rownames("var_time") %>%
+  #### remove rows with zero variation across samples
+  dplyr::filter(if_any(unique(dataVL$Animal_ID)[!grepl(uniqueAnimal_ID,unique(dataVL$Animal_ID))], ~.x != !!rlang::sym(uniqueAnimal_ID))) 
+
+  
+### first calculate the by group differences
+MW_3Group_fxn(tmp, name_to_use, levels_or_FC)
+
+########### prep for heatmap:
+#### columns = samples, rows = assay/timepoint
+
+
+
+### trim to only assay/timepoints that are sig for at least one comparison
+p_value_df1 <- list_of_stats[[paste0(name_to_use,"_",levels_or_FC)]] %>%
+  column_to_rownames("variable_time")
+sig_assay_df <- p_value_df1 %>%
+  rownames_to_column() %>%
+  ### add factored timepoint
+  mutate(Time = factor(str_after_first(rowname,"__"), c("wks_notZero","Week_03","Week_05","Week_07","Week_10","Week_12","Week_16","Week_21")),
+         variable = factor(str_before_first(rowname,"__"),c("p24_titer","number_of_bands","gag_PCR","orfI_II_PCR"))) %>%
+    dplyr::mutate_at(vars(ends_with("_dir")), factor, c("up, p < 0.05","up, p < 0.1","not_sig","down, p < 0.1","down, p < 0.05"))
+ 
+ dir_names_order <- paste0(groups_to_compare$name, "_dir")
+  
+  ##### annotation for rows, first listed will be closest to the heatmap (right side of ann cols), last will be on the left edge of the plot
+  annotation_row = sig_assay_df[,c(rev(dir_names_order),"Time","variable","rowname")] %>%
+   column_to_rownames() 
+
+
+###### annotation for columns
+annotation_col <- data.frame(unique(dataVL[,c("Animal_ID","Treatment","Virus","Batch")])) %>%
+  rownames_to_column() %>%
+  dplyr::mutate(Treatment = factor(Treatment, c("No_depletion","Triple_depletion")),
+                Virus = factor(Virus,virus_factor_levels),
+                Batch = factor(Batch,c("batch1","batch2")), 
+                rowname = NULL) %>%
+  column_to_rownames("Animal_ID") %>%
+  ## sort
+  dplyr::arrange(Treatment,Virus,Batch)
+
+#### set orders to use
+hm_orders_to_use <- list(
+  "by Assay, timepoint, dir"=c("variable","Time",dir_names_order),
+  "by timepoint, Assay, dir"=c("Time","variable",dir_names_order),
+  "by timepoint, dir, Assay"=c("Time",dir_names_order, "variable"),
+    "by dir, Assay, timepoint"=c(dir_names_order,"variable","Time"),
+  "by dir, timepoint, Assay"=c(dir_names_order,"Time","variable")
+)
+
+
+######## set colors, breakscale
+  mycols = colorRampPalette(c("blue4","white","red4"))(1000)
+  #mycols = rev(colorRampPalette(brewer.pal(n=11, name = "RdYlBu"))(1000))
+  range = 2
+  breakscale <- c(-1*range,seq(-.9*range,.9*range, length.out=length(mycols)-1),1*range)
+  
+####### set annotation colors  
+    annotation_colors=list(Treatment=c(No_depletion="turquoise2", Triple_depletion="magenta2"),
+                            Virus=c("HTLV-1ACoI-L"="seagreen4","HTLV-1A_WT"="palegreen"),
+                           Batch=c(batch1="lemonchiffon1",batch2="lemonchiffon3"),
+                         variable=c(p24_titer="hotpink",
+                                    number_of_bands="magenta4",
+                                    gag_PCR="darkgoldenrod3",
+                                    orfI_II_PCR="darkorange"),
+                         Time=c(wks_notZero="black",
+                                Week_03="grey10",
+                                Week_05="grey25",
+                                Week_07="grey40",
+                                Week_10="grey55",
+                                Week_12="grey70",
+                                Week_16="grey85",
+                                Week_21="grey95"))
+    
+      ### add in dir colors
+  for(dir_name in dir_names_order){
+    annotation_colors[[dir_name]]=c("up, p < 0.05"="red2","up, p < 0.1"="lightpink",not_sig="white",
+                                             "down, p < 0.1"="skyblue","down, p < 0.05"="blue2")
+  }
+         annotation_colors[["Virus"]] <- virus_colors  
+       names(annotation_colors[["Virus"]]) <- virus_factor_levels    
+
+
+  hm_orders_to_use <- c("variable","Time",dir_names_order)
+  
+  ### arrange rows by order to use
+  curr_ann_row <- dplyr::arrange(annotation_row,  annotation_row[,hm_orders_to_use])
+  
+tmp2 <- tmp[rownames(curr_ann_row),]
+
+  ### set the gaps for the rows from first element of orders, except if assay
+  if(hm_orders_to_use[1] != "Assay"){
+  gaps_df <- data.frame(table(curr_ann_row[,hm_orders_to_use[1]])) %>%
+    mutate(cumsum = cumsum(Freq))
+  }else{
+    gaps_df <- data.frame("cumsum"=c(0))
+  }
+
+## gaps for columns
+gaps_df_columns_prep <- annotation_col %>%
+  ## add treat_vir
+  dplyr::mutate(treat_vir = paste0(Treatment,"_",Virus),
+                treat_vir = factor(treat_vir,unique(treat_vir)))
+
+gaps_df_columns <- data.frame(table(gaps_df_columns_prep$treat_vir)) %>%
+    mutate(cumsum = cumsum(Freq))
+  
+     # 
+        mycols = c("navyblue","dodgerblue3","dodgerblue1","lightskyblue","lightcyan1","honeydew1",
+               "cornsilk","bisque","peachpuff","pink")
+
+  #mycols = rev(colorRampPalette(brewer.pal(n=11, name = "RdYlBu"))(1000))
+  range = 1
+  breakscale <- c(-1,seq(0,8),9)
+
+  hc <-
+    pheatmap(tmp2[,rownames(annotation_col)],
+             #scale="row", 
+             na_col = "grey70",
+             cluster_cols=FALSE, 
+             cluster_rows = FALSE,
+             fontsize_row = 10,
+             gaps_col = unique(gaps_df_columns$cumsum),
+             gaps_row = unique(gaps_df$cumsum),
+             col=mycols, breaks=breakscale, 
+             clustering_method="ward.D2",
+             annotation_col = annotation_col, 
+             annotation_row = curr_ann_row,
+             annotation_colors = annotation_colors)
+  
+
+  
+ cat("\n")
+  cat(' \n \n') ### this is the key!
+
+
+  ### save values plotted
+list_of_plotted[[paste0(name_to_use)]] <- tmp2[,rownames(annotation_col)] %>% rownames_to_column("variable_time")
+
+```
+
+
+
+<!-- ### Fig 2c boxplots {.tabset} -->
+
+<!-- ```{r Fig2c_boxplots, results='asis', fig.hold='show', out.width="33%", fig.width=6, fig.height=5, eval = eval_Fig2} -->
+
+
+<!--     p_value_df2 <- p_value_df1[,grepl("p_raw",colnames(p_value_df1))]  -->
+
+<!--   ## modify table to be format needed by stat_pvalue_manual -->
+<!-- list_of_pvals <- list() -->
+<!-- for (i in rownames(p_value_df2)){ -->
+<!--   pval_df <- data.frame() -->
+<!--   for (g in 1:nrow(groups_to_compare)){ -->
+<!--     curr_df <- data.frame("group1"=groups_to_compare[g,"group1"], -->
+<!--                                      "group2"=groups_to_compare[g,"group2"], -->
+<!--                                      "p"=p_value_df2[i,paste0(groups_to_compare[g,"name"],"_p_raw")]) -->
+<!--    pval_df <- rbind(pval_df, curr_df) -->
+<!--   } -->
+<!--   list_of_pvals[[i]] <- pval_df -->
+<!-- } -->
+
+<!-- #### add additional factorized vars -->
+<!-- phen_to_plot <- data.frame(t(tmp)) %>% -->
+<!--   rownames_to_column("Animal_ID") %>% -->
+<!--   ### add column annotation -->
+<!--   dplyr::left_join(rownames_to_column(annotation_col,"Animal_ID"), by = "Animal_ID") %>% -->
+<!--   dplyr::mutate(treat_virus = factor(paste0(Treatment,"__",Virus),c("No_depletion__HTLV-1ACoI-L", -->
+<!--                                                                     "Triple_depletion__HTLV-1ACoI-L", -->
+<!--                                                                     "Triple_depletion__HTLV-1A_WT")), -->
+<!--                 treat_virus_batch = factor(paste0(treat_virus,"__",Batch), -->
+<!--                                            c("No_depletion__HTLV-1ACoI-L__batch1", -->
+<!--                                              "Triple_depletion__HTLV-1ACoI-L__batch1", -->
+<!--                                              "Triple_depletion__HTLV-1ACoI-L__batch2", -->
+<!--                                              "Triple_depletion__HTLV-1A_WT__batch1", -->
+<!--                                              "Triple_depletion__HTLV-1A_WT__batch2"))) -->
+
+
+<!-- ####### boxplots for only the sig different TriMutvsTriWT_p_raw -->
+
+
+<!--   for (i in rownames(p_value_df2)[which(p_value_df2$TriMutvsTriWT_p_raw < 0.05)]){ -->
+<!--     # cat("##### ",paste0(i," "),"\n") -->
+<!--     # cat("\n") -->
+<!--     max_y <- max(phen_to_plot[,i], na.rm=TRUE) -->
+<!--     min_y <- min(phen_to_plot[,i], na.rm=TRUE) -->
+<!--     range_y <- max_y-min_y -->
+<!--     num_contrasts <- nrow(groups_to_compare) -->
+
+<!--     ### set batch colors -->
+<!--     batch_values_df <- data.frame("batch"=c("batch1","batch2"), -->
+<!--                                   "values"=c(5,4.99), -->
+<!--                                   "fill"=c("black","white")) -->
+<!--     ### filter for case when only have one batch -->
+<!--       curr_batch_values_df <- batch_values_df %>%  -->
+<!--         dplyr::filter(batch %in% unique(data_df_to_use$Batch)) -->
+
+<!--  ### set treatment virus batch colors (TVB)      -->
+<!-- TVB_values_df <- data.frame("TVB" = c("No_depletion__HTLV-1ACoI-L__batch1", -->
+<!--                                              "Triple_depletion__HTLV-1ACoI-L__batch1", -->
+<!--                                              "Triple_depletion__HTLV-1ACoI-L__batch2", -->
+<!--                                              "Triple_depletion__HTLV-1A_WT__batch1", -->
+<!--                                              "Triple_depletion__HTLV-1A_WT__batch2"), -->
+<!--                             "fill"=c("turquoise3","magenta2","white","magenta2","white")) -->
+<!-- curr_TVB_values_df <- TVB_values_df %>% -->
+<!--   dplyr::filter(TVB %in% unique(phen_to_plot$treat_virus_batch)) -->
+
+
+<!--     #### base plot -->
+<!--      p <- ggplot(phen_to_plot, aes(x = treat_virus, y = !!rlang::sym(i), label=Animal_ID),  -->
+<!--                    color = Treatment,  -->
+<!--                  fill = treat_virus_batch, -->
+<!--                  size = Batch ### just to have a legend -->
+<!--                  ) +  -->
+<!--         scale_color_manual(name = "Treatment (color)", values=c("turquoise3","magenta2")) +   -->
+<!--         scale_fill_manual(values=curr_TVB_values_df$fill) +   -->
+<!--         scale_shape_manual(name=paste0("Virus (shape)"), values=c(24,21)) + -->
+<!--         scale_size_manual(name=paste0("Batch (fill)"), values=curr_batch_values_df$values)+ ## for legend -->
+<!--         geom_point(aes( -->
+<!--                        fill=treat_virus_batch, -->
+<!--                        color=Treatment, -->
+<!--                        shape=Virus, -->
+<!--                        size=Batch -->
+<!--         ), #size = 5,  -->
+<!--         stroke = 0.8, alpha = 0.7)+ -->
+<!--         guides( -->
+<!--           # fill=guide_legend(override.aes=list( -->
+<!--           #   shape=c(24,24,24,21,21), -->
+<!--           #   fill=c("turquoise3","magenta2","white","magenta2","white"), -->
+<!--           #   color=c("turquoise3","magenta2","magenta2","magenta2","magenta2"), -->
+<!--           #   size = 5 -->
+<!--           # )), -->
+<!--           fill=FALSE, -->
+<!--           shape=guide_legend(override.aes=list( -->
+<!--             fill="black", -->
+<!--             size = 5)), -->
+<!--           size=guide_legend(override.aes = list( -->
+<!--             color = "black", -->
+<!--             fill = curr_batch_values_df$fill, -->
+<!--             shape = c(21)), -->
+<!--             size = 5), -->
+<!--           color=guide_legend(override.aes = list( -->
+<!--             size = 5 -->
+<!--           )))+ ### change shape in legend to have fillable quality, remove duplicate border legend  -->
+<!--         geom_text_repel() +  -->
+<!--         scale_y_continuous(limits = c(min_y*(0.8), max_y*(1+0.1*(num_contrasts+1))))+ -->
+<!--         #rremove("x.axis")+   -->
+<!--         theme_bw()+ -->
+<!--         labs(y = paste0(i), -->
+<!--            title = paste0(i))+ -->
+<!--         theme(legend.position="right", axis.ticks.x = element_blank(), -->
+<!--             axis.title.x = element_blank(), axis.text.x = element_blank(), -->
+<!--             plot.title = element_text(hjust = 0.5), #centers title -->
+<!--             panel.grid.major = element_blank(), panel.grid.minor = element_blank(), -->
+<!--             panel.border = element_blank(), axis.line.y = element_line(colour = "black") -->
+<!--       ) -->
+
+<!--      box_pval_cut <- 0.05 -->
+
+<!--      ##### add p values -->
+<!--       for(l in 1:num_contrasts){ -->
+<!--         p <- p + -->
+<!--           stat_pvalue_manual(list_of_pvals[[i]][l,], label = "p", -->
+<!--                          y.position = c(max_y+0.1*l*range_y), bracket.size = 0.3, -->
+<!--                          color = list(ifelse(p_value_df2[which(rownames(p_value_df2) == i),paste0(groups_to_compare$name[l],"_p_raw")] < as.double(box_pval_cut), -->
+<!--                                              "springgreen3", "black")) #if p is sig, green -->
+<!--       ) -->
+<!--       } -->
+
+<!--       plot(p) -->
+
+
+
+
+
+<!--       cat("\n") -->
+<!--   cat(' \n \n') ### this is the key! -->
+
+<!--   } -->
+
+<!--        cat("\n") -->
+<!--   cat(' \n \n') ### this is the key! -->
+
+
+<!--     ### save values plotted -->
+<!-- list_of_plotted[[paste0("Fig2c_",shortName_for_wtBatch)]] <- phen_to_plot[,c("Animal_ID","Treatment","Virus",rownames(p_value_df2)[which(p_value_df2$TriMutvsTriWT_p_raw < 0.05)])] -->
+
+
+
+<!-- ``` -->
+
+
+
+### Viral Score Calcs
+
+**For each timepoint, animal:**
+
+1. Calculate tp_score across all virus variables:
+
+$\text{tp_score__WeekXX}=\frac{\text{gag_PCR}_{\text{WeekXX }} + \text{ orfI_II_PCR}_{\text{WeekXX }} + \text{ number_of_bands}_{\text{WeekXX }}/\text{number_of_bands}_{\text{MAX }} + \text{ log}_{10}(\text{p24_titer}_{\text{WeekXX}}) /log_{10}(\text{p24_titer}_{MAX})}{TotalNumberOfVirusVariables}$
+
+- each virus variable has range of 0-1
+- each tp_score__WeekXX has range of 0-1
+
+
+2. Calculate fracVars_notZero across all virus variables:
+
+ $\text{fracVars_notZero__WeekXX}=\frac{\text{NumberOfVirusVariables__NotZero}_{WeekXX}}{TotalNumberOfVirusVariables}$
+
+- each fracVars_notZero__WeekXX has range of 0-1
+
+
+3. Combine tp_score__WeekXX (step 1.) & fracVars_notZero__WeekXX (step 2.)
+
+$\text{tp_comb_score__WeekXX}=\frac{\text{tp_score__WeekXX }+\text{ fracVars_notZero__WeekXX}}{2}$
+
+- each tp_comb_score__WeekXX has range of 0-1
+
+
+**Then, for each animal:**
+
+*Generate composite "timepoint-derived" scores:*
+
+4. Average tp_comb_score (from step 3.) across timepoints 
+
+$\text{tp_comb_scores__Mean}=\frac{\sum_{i=Baseline}^{n=Week21}{\text{tp_comb_score}_{i}}}{TotalNumberOfTimepoints}$
+
+5. Calculate fracTPscores_notZero (from step 3.) across timepoints 
+
+$\text{fracTPscores_notZero}=\frac{\sum_{i=Baseline}^{n=Week21}{\text{tp_comb_score__NotZero}_{i}}}{TotalNumberOfTimepoints}$
+
+6. Combine tp_comb_scores__Mean (step 4.) & fracTPscores_notZero (step 5.)
+
+$\text{TP_COMBO}=\frac{\text{tp_comb_scores__Mean } + \text{ fracTPscores_notZero}}{2}$
+
+
+
+**Now, for each virus variable, animal:**
+
+7. Calculate var_score across all timepoints:
+
+$\text{e.g. var_score__p24_titer}=\frac{\text{ log}_{10}(\text{p24_titer}_{\text{Baseline}}) /log_{10}(\text{p24_titer}_{MAX}) \text{ } + \text{ log}_{10}(\text{p24_titer}_{\text{Week03}}) /log_{10}(\text{p24_titer}_{MAX}) \text{ } + \text{ ... } + \text{ log}_{10}(\text{p24_titer}_{\text{Week21}}) /log_{10}(\text{p24_titer}_{MAX})}{TotalNumberOfTimepoints}$
+
+- each p24_titer has range of 0-1
+- each var_score__p24_titer has range of 0-1
+
+
+8. Calculate fracTPs_notZero across all timepoints:
+
+ $\text{e.g. fracTPs_notZero__p24_titer}=\frac{\text{NumberOfTimepoints__NotZero}_{p24_titer}}{TotalNumberOfTimepoints}$
+
+- each fracTPs_notZero__p24_titer has range of 0-1
+
+
+9. Combine var_score__p24_titer (step 7.) & fracTPs_notZero__p24_titer (step 8.)
+
+$\text{e.g. var_comb_score__WeekXX}=\frac{\text{var_score__p24_titer }+\text{ fracTPs_notZero__p24_titer}}{2}$
+
+- each var_comb_score__p24_titer has range of 0-1
+
+*Generate composite "virus variable-derived" scores:*
+
+10. Average var_comb_score (from step 9.) across virus variables 
+
+$\text{var_comb_scores__Mean}=\frac{\sum_{i=\text{gag_PCR}}^{n=\text{p24_titer}}{\text{var_comb_score}_{i}}}{TotalNumberOfVirusVariables}$
+
+11. Calculate fracVARscores_notZero (from step 9.) across timepoints 
+
+$\text{fracVARscores_notZero}=\frac{\sum_{i=\text{gag_PCR}}^{n=\text{p24_titer}}{\text{var_comb_score__NotZero}_{i}}}{TotalNumberOfVirusVariables}$
+
+12. Combine var_comb_scores__Mean (step 10.) & fracVARscores_notZero (step 11.)
+
+$\text{VAR_COMBO}=\frac{\text{var_comb_scores__Mean } + \text{ fracVARscores_notZero}}{2}$
+
+*And finally combine "timepoint-derived" & "virus variable-derived" scores:*
+
+13. Combine tp_comb_scores__Mean (step 4.) & var_comb_scores__Mean (step 10.)
+
+$\text{Mean}=\frac{\text{tp_comb_scores__Mean } + \text{ var_comb_scores__Mean}}{2}$
+
+14. Combine fracTPscores_notZero (step 5.) & fracVARscores_notZero (step 11.)
+
+$\text{fracScores_notZero}=\frac{\text{fracTPscores_notZero } + \text{ fracVARscores_notZero}}{2}$
+
+15. Combine TP_COMBO (step 6.) & VAR_COMBO (step 12.)
+
+$\text{COMBO}=\frac{\text{TP_COMBO } + \text{ VAR_COMBO}}{2}$
+
+```{r viralScoreCalcs, eval = eval_Fig2}
+
+dataVL1 <- dataVL[,c("Animal_ID","Time",VL_columns)] %>%
+      ### log10 p24 titer
+  dplyr::mutate(p24_titer = log10(p24_titer)) %>%
+ ### pivot longer 
+  tidyr::pivot_longer(cols = all_of(VL_columns), names_to = "variable",values_to = "value") %>%
+  ######## replace values with norm values (on 0-1 scalee)
+  dplyr::mutate(value = ifelse(variable == "p24_titer", (value/4),
+                               ifelse(variable == "number_of_bands", (value/9),
+                                      value)))
+
+
+ 
+  #### add cumulative non-zero for timepoints
+dataVL2 <- dataVL1 %>% 
+  group_by(Animal_ID,variable) %>%
+  dplyr::summarise(Time = paste0("fracTPs_notZero"),
+            value = length(which(value != 0))/length(which(value != "no"))) %>%
+  bind_rows(dataVL1, .) 
+
+  #### add cumulative non-zero for vars
+dataVL3 <- dataVL2 %>% 
+  group_by(Animal_ID,Time) %>%
+  dplyr::summarise(variable = paste0("fracVars_notZero"),
+            value = length(which(value != 0))/length(which(value != "no"))) %>%
+  bind_rows(dataVL2, .) %>%
+  #### return to semi-wide
+  tidyr::pivot_wider(names_from = "variable", values_from = "value") %>%
+    #### generate 0-1 variable for each timepoint/animal
+  dplyr::mutate(tp_score = ifelse(Time == "fracTPs_notZero", 
+                                  ### divide by num vars * number of total timepoints available (before adding fracTPs_notZero)
+                                   ((gag_PCR + orfI_II_PCR + number_of_bands + p24_titer) / (length(unique(dataVL1$Time))*length(unique(dataVL1$variable)))),                                  
+                                  ## divide each by their hard max, then divide by the number of vars, including fracVarsNotZero
+                                  ((gag_PCR + orfI_II_PCR + number_of_bands + p24_titer) /length(unique(dataVL1$variable)))),
+                tp_comb_score = (tp_score + fracVars_notZero)/2) %>% 
+   ### pivot longer to get per var score
+  tidyr::pivot_longer(cols = all_of(c(VL_columns, "fracVars_notZero","tp_score","tp_comb_score")), names_to = "variable",values_to = "value") %>%
+  ### return to (reverse) semi-wide
+   tidyr::pivot_wider(names_from = "Time", values_from = "value") %>%
+ 
+    ##### note that fracTPs_notZero for fracTPs_notZero are from the vars angle, not the TPs angle ---> these are not useful
+  dplyr::mutate(
+                #### generate 0-1 variable for each variable/animal
+                var_score = ifelse(variable == "fracVars_notZero", 
+                                  ### divide by num vars * number of total timepoints available (before adding fracTPs_notZero)
+                                  ((Baseline + Week_03 + Week_05 + Week_07 + Week_10 + Week_12 + Week_16 + Week_21) / (length(unique(dataVL1$Time))*length(unique(dataVL1$variable)))),
+                                  ## divide each by their hard max, then divide by the number of tps, including fracVarsNotZero
+                                  ifelse(variable == "p24_titer",
+                                         ((Baseline + Week_03 + Week_05 + Week_07 + Week_10 + Week_12 + Week_16 + Week_21) / (length(unique(dataVL1$Time)))),
+                                         ifelse(variable == "number_of_bands",
+                                                ((Baseline + Week_03 + Week_05 + Week_07 + Week_10 + Week_12 + Week_16 + Week_21) / (length(unique(dataVL1$Time)))),
+                                  ((Baseline + Week_03 + Week_05 + Week_07 + Week_10 + Week_12 + Week_16 + Week_21) / (length(unique(dataVL1$Time))))))),
+                var_comb_score = (var_score + fracTPs_notZero)/2) %>%
+   ### pivot longer to return to symmetric
+  tidyr::pivot_longer(cols = all_of(c(unique(dataVL1$Time), "fracTPs_notZero","var_score","var_comb_score")), names_to = "Time",values_to = "value") 
+
+
+```
+
+### Fig 2d heatmap 
+
+
+```{r Fig2d_viralscoreHeatmap, results='asis', fig.width=10, fig.height=10, eval = eval_Fig2}
+name_prefix <- "Fig2dprep"
+#### plot each tp_score, fracVars_notZero and tp_comb_score for each animal/timepoint (8 points per animal)
+
+###############################################
+################# by timepoint
+###############################################
+long_name_to_use <- "By Time Sc"
+### trim to actual timepoints (not scores)
+  curr_df <- dataVL3[which(dataVL3$Time %in% unique(dataVL1$Time)),] %>%
+    #### combine variable & time
+    dplyr::mutate(var_time = paste0(variable,"__",Time)) %>%
+    ### remove single var/time
+    dplyr::select(-c(variable,Time)) %>%
+    ### make square
+    tidyr::pivot_wider(names_from = "Animal_ID",values_from = "value") %>%
+    column_to_rownames("var_time")
+ 
+### first calculate the by group differences
+name_to_use <- paste0(name_prefix,"_",str_remove_all(long_name_to_use, " "),shortName_for_wtBatch)
+MW_3Group_fxn(curr_df, name_to_use, levels_or_FC)
+
+      ##### save curr_df (tp derived scores)
+vs_scores_prep1 <- curr_df
+ 
+###############################################
+  #### now just the tp_comb_score, with mean, frac notzero and final combo
+  ###############################################
+   long_name_to_use <- "By Time Sum"
+  
+
+  ##### build the dataframe 
+  ### first select only the rows from above
+   curr_df_long <- curr_df[rownames(curr_df)[grepl("tp_comb_score",rownames(curr_df))],] %>%  
+        rownames_to_column() %>%
+     ### make longer to be able to add fraction of non zero
+    tidyr::pivot_longer(!rowname, names_to = "Animal_ID", values_to = "value") 
+  
+   #### add frac non zero
+ frac_nonZero_row <- curr_df_long %>%
+      group_by(Animal_ID) %>%
+  dplyr::summarise(rowname = paste0("fracTPscores__notZero"),
+            value = length(which(value != 0))/length(which(value != "no"))) %>%
+  tidyr::pivot_wider(names_from = "Animal_ID", values_from = "value")
+ 
+ #### to a copy before the frac is added, add the mean
+ curr_df_long2 <- curr_df_long %>%
+   #### make wider to add the mean
+   tidyr::pivot_wider(names_from = "Animal_ID", values_from = "value") %>%
+     add_row(rowname = 'tp_comb_scores__Mean', !!! colMeans(.[-1])) %>%
+   add_row(frac_nonZero_row)
+ 
+ #### finally add the combo of the mean and frac non zero
+ curr_df2 <- curr_df_long2 %>%
+   dplyr::filter(grepl("scores",rowname)) %>%
+   dplyr::summarize(rowname = "TP_COMBO", across(c(unique(curr_df_long$Animal_ID)), mean)) %>%
+   bind_rows(curr_df_long2, .) %>%
+   column_to_rownames()
+ 
+ 
+  ##### save curr_df2 (timepoint derived summary scores)
+tp_curr_df2 <- curr_df2
+
+
+###############################################
+#### plot each var_score, fracTPs_notZero and var_comb_core for each animal/variable (4 points per animal)
+###############################################
+ long_name_to_use <- "By Var Sc"
+  
+  
+  ### trim to actual Variables (not scores)
+  curr_df <- dataVL3[which(dataVL3$variable %in% unique(dataVL1$variable)),] %>%
+    #### combine variable & time
+    dplyr::mutate(var_time = paste0(Time,"__",variable)) %>%
+    ### remove single var/time
+    dplyr::select(-c(variable,Time)) %>%
+    ### make square
+    tidyr::pivot_wider(names_from = "Animal_ID",values_from = "value") %>%
+    column_to_rownames("var_time")
+ 
+  
+  
+  ### first calculate the by group differences
+name_to_use <- paste0(name_prefix,"_",str_remove_all(long_name_to_use, " "),shortName_for_wtBatch)
+MW_3Group_fxn(curr_df, name_to_use, levels_or_FC)
+
+    ##### save curr_df (variable derived scores)
+vs_scores_prep2 <- curr_df
+###############################################
+  #### now just the tp_comb_score, with mean, frac notzero and final combo
+  ###############################################
+    long_name_to_use <- "By Var Sum"
+  
+
+  ##### build the dataframe 
+  ### first select only the rows from above
+   curr_df_long <- curr_df[rownames(curr_df)[grepl("var_comb_score",rownames(curr_df))],] %>%  
+        rownames_to_column() %>%
+     ### make longer to be able to add fraction of non zero
+    tidyr::pivot_longer(!rowname, names_to = "Animal_ID", values_to = "value") 
+  
+   #### add frac non zero
+ frac_nonZero_row <- curr_df_long %>%
+      group_by(Animal_ID) %>%
+  dplyr::summarise(rowname = paste0("fracVARscores__notZero"),
+            value = length(which(value != 0))/length(which(value != "no"))) %>%
+  tidyr::pivot_wider(names_from = "Animal_ID", values_from = "value")
+ 
+ #### to a copy before the frac is added, add the mean
+ curr_df_long2 <- curr_df_long %>%
+   #### make wider to add the mean
+   tidyr::pivot_wider(names_from = "Animal_ID", values_from = "value") %>%
+     add_row(rowname = 'var_comb_scores__Mean', !!! colMeans(.[-1])) %>%
+   add_row(frac_nonZero_row)
+ 
+ #### finally add the combo of the mean and frac non zero
+ curr_df2 <- curr_df_long2 %>%
+   dplyr::filter(grepl("scores",rowname)) %>%
+   dplyr::summarize(rowname = "VAR_COMBO", across(c(unique(curr_df_long$Animal_ID)), mean)) %>%
+   bind_rows(curr_df_long2, .) %>%
+   column_to_rownames()
+ 
+ 
+ 
+ 
+
+  ##### save curr_df2 (variable derived scores)
+var_curr_df2 <- curr_df2
+
+ 
+###############################################
+######## all the summary scores and the summary of the summary
+###############################################
+
+name_prefix <- "Fig2de"
+  #  cat("##### ", paste0("both, summary "),"\n")
+  # cat("\n")
+  
+  
+           cat(" ", paste0("timepoint-derived scores from step 3. and their combinations from steps 7-9."),"\n")
+  cat("\n")
+
+             cat(" ", paste0("plus"),"\n")
+  cat("\n")
+
+          cat(" ", paste0("variable-derived scores from step 6. and their combinations from steps 10-12."),"\n")
+  cat("\n")
+
+             cat(" ", paste0("plus"),"\n")
+  cat("\n")
+
+          cat(" ", paste0("combinations of timepoint-derived and variable-derived scores (steps 13-15.)"),"\n")
+  cat("\n")
+  
+  ##### set long name
+  long_name_to_use <- "BothSumSc"
+
+ ########### generate dataframe
+    curr_df3pre <- rbind(tp_curr_df2,var_curr_df2[,colnames(tp_curr_df2)]) %>%
+    rownames_to_column()
+    
+    #### add average of tp score and var score
+    TPvar_mean <- curr_df3pre %>%
+   dplyr::filter(grepl("Mean",rowname)) %>%
+   dplyr::summarize(rowname = "Mean", across(colnames(tp_curr_df2), mean)) 
+    
+    TPvar_frac <- curr_df3pre %>%
+   dplyr::filter(grepl("frac",rowname)) %>%
+   dplyr::summarize(rowname = "frac_notZero", across(colnames(tp_curr_df2), mean)) 
+    
+    TPvar_combo <- curr_df3pre %>%
+   dplyr::filter(grepl("COMBO",rowname)) %>%
+   dplyr::summarize(rowname = "COMBO", across(colnames(tp_curr_df2), mean)) 
+    
+    
+   curr_df3 <- bind_rows(curr_df3pre, TPvar_mean) %>%
+   add_row(TPvar_frac) %>%
+   add_row(TPvar_combo) %>%
+   column_to_rownames()
+   
+   
+    
+ ########## calculate group differences
+ name_to_use <- paste0(name_prefix,"_",str_remove_all(long_name_to_use, " "),shortName_for_wtBatch)
+MW_3Group_fxn(curr_df3, name_to_use,levels_or_FC)
+
+   
+
+
+########### prep for heatmap:
+#### columns = samples, rows = assay/timepoint
+
+### trim to only assay/timepoints that are sig for at least one comparison
+p_value_df1 <-  list_of_stats[[paste0(name_to_use,"_",levels_or_FC)]] %>%
+  column_to_rownames("variable_time")
+
+sig_assay_df <- p_value_df1 %>%
+    rownames_to_column() %>%
+  ### add factored dirs
+  dplyr::mutate_at(vars(ends_with("_dir")), factor, c("up, p < 0.05","up, p < 0.1","not_sig","down, p < 0.1","down, p < 0.05"))
+
+
+   
+   
+    ##### row annotation = just variable
+  annotation_row3 <- data.frame("rowname"=rownames(curr_df3)) %>%
+    ### just variable that has all the names
+    dplyr::mutate(variable = factor(rowname,c("tp_comb_score__Baseline","tp_comb_score__Week_03","tp_comb_score__Week_05","tp_comb_score__Week_07",
+                                              "tp_comb_score__Week_10","tp_comb_score__Week_12","tp_comb_score__Week_16","tp_comb_score__Week_21",
+                                              "tp_comb_scores__Mean","fracTPscores__notZero","TP_COMBO",
+                                              "var_comb_score__p24_titer","var_comb_score__number_of_bands","var_comb_score__gag_PCR","var_comb_score__orfI_II_PCR",
+                                              "var_comb_scores__Mean","fracVARscores__notZero","VAR_COMBO",
+                                              "Mean","frac_notZero","COMBO"))) %>%
+    dplyr::arrange(variable) %>%
+     ### add in sig levels
+    dplyr::left_join(sig_assay_df[,c(dir_names_order,"rowname")], by = "rowname") %>%
+    ### arrange in correct order
+    dplyr::relocate(!!!rlang::syms(rev(dir_names_order)),variable,rowname) %>%
+    column_to_rownames()
+  
+
+  
+
+
+  ##### annotation coluse
+     annotation_colors=list(Treatment=c(No_depletion="turquoise2", Triple_depletion="magenta2"),
+                            Batch=c(batch1="lemonchiffon1",batch2="lemonchiffon3"),
+                            Virus=c("HTLV-1ACoI-L"="seagreen4","HTLV-1A_WT"="palegreen"),
+                         variable=c(tp_comb_score__Baseline="black",
+                                tp_comb_score__Week_03="grey10",
+                                tp_comb_score__Week_05="grey25",
+                                tp_comb_score__Week_07="grey40",
+                                tp_comb_score__Week_10="grey55",
+                                tp_comb_score__Week_12="grey70",
+                                tp_comb_score__Week_16="grey85",
+                                tp_comb_score__Week_21="grey95",
+                                tp_comb_scores__Mean="deepskyblue",
+                                fracTPscores__notZero="gold1",
+                                TP_COMBO="green",
+                                var_comb_score__p24_titer="hotpink",
+                                var_comb_score__number_of_bands="magenta4",
+                                var_comb_score__gag_PCR="darkgoldenrod3",
+                                var_comb_score__orfI_II_PCR="darkorange",
+                                var_comb_scores__Mean="deepskyblue",
+                                fracVARscores__notZero="gold1",
+                                VAR_COMBO="green",
+                                Mean="deepskyblue",
+                                frac_notZero="gold1",
+                                COMBO="green"))
+     
+       ### add in dir colors
+  for(dir_name in dir_names_order){
+    annotation_colors[[dir_name]]=c("up, p < 0.05"="red2","up, p < 0.1"="lightpink",not_sig="white",
+                                             "down, p < 0.1"="skyblue","down, p < 0.05"="blue2")
+  }
+           
+
+          annotation_colors[["Virus"]] <- virus_colors  
+       names(annotation_colors[["Virus"]]) <- virus_factor_levels    
+
+  
+
+  mycols = colorRampPalette(c("white","khaki","red4"))(1000)
+  #mycols = rev(colorRampPalette(brewer.pal(n=11, name = "RdYlBu"))(1000))
+  range = 1
+  breakscale <- c(0,seq(0.001*range,.999*range, length.out=length(mycols)-1),1*range)
+
+## gaps for columns
+gaps_df_columns_prep <- annotation_col %>%
+  ## add treat_vir
+  dplyr::mutate(treat_vir = paste0(Treatment,"_",Virus),
+                treat_vir = factor(treat_vir,unique(treat_vir)))
+
+gaps_df_columns <- data.frame(table(gaps_df_columns_prep$treat_vir)) %>%
+    mutate(cumsum = cumsum(Freq))
+
+
+ 
+  hc <-
+    pheatmap(curr_df3,
+             #scale="row", 
+             na_col = "grey70",
+             cluster_cols=FALSE, 
+             cluster_rows = FALSE,
+             cellheight = 20, cellwidth = 15,
+             fontsize_row = 10,
+             gaps_col = unique(gaps_df_columns$cumsum),
+             gaps_row = c(8,11,15,18),
+             col=mycols, breaks=breakscale, 
+             clustering_method="ward.D2",
+             annotation_col = annotation_col, 
+             annotation_row = annotation_row3,
+             annotation_colors = annotation_colors)
+
+
+  cat("\n")
+  cat(' \n \n') ### this is the key!
+
+### save combo to add to data
+  viral_score_df <- curr_df3
+  
+  list_of_plotted[[paste0("Fig2d_prep",shortName_for_wtBatch)]] <-  rbind(vs_scores_prep1,vs_scores_prep2[,colnames(vs_scores_prep1)]) %>%
+    rownames_to_column("variable_time")
+  
+    list_of_plotted[[paste0("Fig2de",shortName_for_wtBatch)]] <-  viral_score_df %>%
+    rownames_to_column("variable_time")
+```
+  
+### Fig 2e boxplot {.tabset}
+
+``` {r Fig2e_summaryScoreBoxplot, results='asis', fig.width=5, fig.height=5, eval = eval_Fig2}
+name_prefix <- "Fig2de"
+long_name_to_use <- "BothSumSc"
+ name_to_use <- paste0(name_prefix,"_",str_remove_all(long_name_to_use, " "),shortName_for_wtBatch)
+p_value_df1 <- list_of_stats[[paste0(name_to_use,"_",levels_or_FC)]] %>%
+  column_to_rownames("variable_time")
+
+  
+p_value_df2 <- p_value_df1[,grepl("p_raw",colnames(p_value_df1))] 
+  
+  ## modify table to be format needed by stat_pvalue_manual
+list_of_pvals <- list()
+for (i in rownames(p_value_df2)){
+  pval_df <- data.frame()
+  for (g in 1:nrow(groups_to_compare)){
+    curr_df <- data.frame("group1"=groups_to_compare[g,"group1"],
+                                     "group2"=groups_to_compare[g,"group2"],
+                                     "p"=p_value_df2[i,paste0(groups_to_compare[g,"name"],"_p_raw")])
+   pval_df <- rbind(pval_df, curr_df)
+  }
+  list_of_pvals[[i]] <- pval_df
+}
+
+#### add additional factorized vars
+phen_to_plot <- data.frame(t(viral_score_df)) %>%
+  rownames_to_column("Animal_ID") %>%
+  ### add column annotation
+  dplyr::left_join(rownames_to_column(annotation_col,"Animal_ID"), by = "Animal_ID") %>%
+  dplyr::mutate(treat_virus = factor(paste0(Treatment,"__",Virus),c("No_depletion__HTLV-1ACoI-L",
+                                                                    "Triple_depletion__HTLV-1ACoI-L",
+                                                                    "Triple_depletion__HTLV-1A_WT")),
+                treat_virus_batch = factor(paste0(treat_virus,"__",Batch),
+                                           c("No_depletion__HTLV-1ACoI-L__batch1",
+                                             "Triple_depletion__HTLV-1ACoI-L__batch1",
+                                             "Triple_depletion__HTLV-1ACoI-L__batch2",
+                                             "Triple_depletion__HTLV-1A_WT__batch1",
+                                             "Triple_depletion__HTLV-1A_WT__batch2")))
+
+
+
+
+####### boxplots for only the sig different TriMutvsTriWT_p_raw
+
+
+ 
+####### for boxplots 
+
+
+ # for (i in rownames(p_value_df2)){
+    # cat("###### ",paste0(i," "),"\n")
+    # cat("\n")
+
+### only for final COMBO score
+i <- "COMBO"
+    max_y <- max(phen_to_plot[,i], na.rm=TRUE)
+    min_y <- min(phen_to_plot[,i], na.rm=TRUE)
+    range_y <- max_y-min_y
+    num_contrasts <- nrow(groups_to_compare)
+    
+        ### set batch colors
+    batch_values_df <- data.frame("batch"=c("batch1","batch2"),
+                                  "values"=c(5,4.99),
+                                  "fill"=c("black","white"))
+       ### filter for case when only have one batch
+      curr_batch_values_df <- batch_values_df %>% 
+        dplyr::filter(batch %in% unique(data_df_to_use$Batch))
+      
+ ### set treatment virus batch colors (TVB)     
+TVB_values_df <- data.frame("TVB" = c("No_depletion__HTLV-1ACoI-L__batch1",
+                                             "Triple_depletion__HTLV-1ACoI-L__batch1",
+                                             "Triple_depletion__HTLV-1ACoI-L__batch2",
+                                             "Triple_depletion__HTLV-1A_WT__batch1",
+                                             "Triple_depletion__HTLV-1A_WT__batch2"),
+                            "fill"=c("turquoise3","magenta2","white","magenta2","white"))
+curr_TVB_values_df <- TVB_values_df %>%
+  dplyr::filter(TVB %in% unique(phen_to_plot$treat_virus_batch))
+    
+    
+
+   
+    #### base plot
+     p <- ggplot(phen_to_plot, aes(x = treat_virus, y = !!rlang::sym(i), label=Animal_ID), 
+                 color = Treatment, 
+                 fill = treat_virus_batch,
+                 size = Batch ### just to have a legend
+                 ) + 
+        scale_color_manual(name = "Treatment (color)", values=c("turquoise3","magenta2")) +  
+        scale_fill_manual(values=curr_TVB_values_df$fill) +  
+        scale_shape_manual(name=paste0("Virus (shape)"), values=c(24,21)) +
+        scale_size_manual(name=paste0("Batch (fill)"), values=curr_batch_values_df$values)+ ## for legend
+        geom_point(aes(
+                       fill=treat_virus_batch,
+                       color=Treatment,
+                       shape=Virus,
+                       size=Batch
+        ), #size = 5, 
+        stroke = 0.8, alpha = 0.7)+
+        guides(
+          # fill=guide_legend(override.aes=list(
+          #   shape=c(24,24,24,21,21),
+          #   fill=c("turquoise3","magenta2","white","magenta2","white"),
+          #   color=c("turquoise3","magenta2","magenta2","magenta2","magenta2"),
+          #   size = 5
+          # )),
+          fill=FALSE,
+          shape=guide_legend(override.aes=list(
+            fill="black",
+            size = 5)),
+          size=guide_legend(override.aes = list(
+            color = "black",
+            fill = curr_batch_values_df$fill,
+            shape = c(21)),
+            size = 5),
+          color=guide_legend(override.aes = list(
+            size = 5
+          ))
+          
+          )+ ### change shape in legend to have fillable quality, remove duplicate border legend 
+        geom_text_repel() + 
+        scale_y_continuous(limits = c(min_y*(0.8), max_y*(1+0.1*(num_contrasts+1))))+
+        #rremove("x.axis")+  
+        theme_bw()+
+        labs(y = paste0(i),
+           title = paste0(i))+
+        theme(legend.position="right", axis.ticks.x = element_blank(),
+            axis.title.x = element_blank(), axis.text.x = element_blank(),
+            plot.title = element_text(hjust = 0.5), #centers title
+            panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+            panel.border = element_blank(), axis.line.y = element_line(colour = "black")
+      )
+     
+     box_pval_cut <- 0.05
+     
+     ##### add p values
+      for(l in 1:num_contrasts){
+        p <- p +
+          stat_pvalue_manual(list_of_pvals[[i]][l,], label = "p",
+                         y.position = c(max_y+0.1*l*range_y), bracket.size = 0.3,
+                         color = list(ifelse(p_value_df2[which(rownames(p_value_df2) == i),paste0(groups_to_compare$name[l],"_p_raw")] < as.double(box_pval_cut),
+                                             "springgreen3", "black")) #if p is sig, green
+      )
+      }
+
+      plot(p)
+    
+    
+    
+    
+    
+      cat("\n")
+  cat(' \n \n') ### this is the key!
+
+#  }
+  
+  
+  
+      ### save values plotted
+list_of_plotted[[paste0("Fig2de",shortName_for_wtBatch)]] <- phen_to_plot[,c("Animal_ID","Treatment","Virus","COMBO")]
+  
+
+```
+
+
+
+
+
+
+
+
+
+```{r prep_BroadPops_WTbatch1a2combo}
+######### trim to both WT batch1/2 only
+phen_long_to_use <- phen_long %>%
+  #  dplyr::filter(Treatment == "Triple_depletion") %>%
+  dplyr::filter(Virus == "HTLV-1ACoI-L" & Batch %in% c("batch1","batch2") |
+                  Virus == "HTLV-1A_WT" & Batch %in% c("batch1","batch2"))
+name_for_wtBatch <- "WT batch 1 & 2 combined"
+shortName_for_wtBatch <- "" ## no name needed since WT1a2 for all analyses
+
+### no dep, DV1 then WT
+shape_values_to_use <- c(21,22,23,25,
+                         21,22,23,2,25,
+                         21,22,23,25,24,1,0,5,2,6)
+num_Chi_animals <- 5
+
+
+#### reset order for treatment_virus etc.
+uniqueAnimal_ID <- "TKM"
+virus_factor_levels <- c("HTLV-1ACoI-L","HTLV-1A_WT")
+virus_colors <- c("seagreen4","palegreen")
+ 
+  ### set up contrast dataframe group2 vs group1
+groups_to_compare <- data.frame("group1"=c("Triple_depletion__HTLV-1A_WT","No_depletion__HTLV-1ACoI-L","No_depletion__HTLV-1ACoI-L"),                            
+                                  "group2"=c("Triple_depletion__HTLV-1ACoI-L","Triple_depletion__HTLV-1ACoI-L","Triple_depletion__HTLV-1A_WT"),
+                                  "name"=c("TriMutvsTriWT","TriMutvsNoMut","TriWTvsNoMut"))
+#### set order for treatment_virus
+treat_virus_factor_levels <- c("Triple_depletion__HTLV-1ACoI-L","No_depletion__HTLV-1ACoI-L","Triple_depletion__HTLV-1A_WT","No_depletion__HTLV-1A_WT")
+data_df_to_use <- data_df %>%
+  dplyr::filter(Virus == "HTLV-1ACoI-L" & Batch %in% c("batch1","batch2") |
+                  Virus == "HTLV-1A_WT" & Batch %in% c("batch1","batch2"))
+
+```
+
+
+## Triple vs No depletion: Day 0 broad cell populations (Supp Fig 2)  {.tabset}
+
+
+<span style="color:red;">red p value: p < 0.05, left timepoint/group is higher than right timepoint/group </span>
+
+<span style="color:blue;">blue p value: p < 0.05, left timepoint/group is lower than right timepoint/group </span>
+
+<span style="color:black;">black p value: p > 0.05 </span>
+
+
+``` {r setVars}
+### calcs are for both Supp Fig 2 and 4, then trim later
+fig_name <- paste0("SFig2a4_",shortName_for_wtBatch)
+vars_to_use <- cellpop_columns
+var_name <- "cellpops_broad"
+```
+
+```{r setCWT_vsBaseline}
+CWT_vsX <- "week00"
+```
+
+```{r CWT_glm_prep}
+
+# ### Changed or not with time (vs `r paste0(CWT_vsX)`) {.tabset}
+# 
+# Within each group, which assays change between timepoints?
+# 
+# Which changes are shared across groups or unique to each group?
+# 
+# *Paired analysis using generalized estimating equations (geeglm) with animal ID as random effect*
+
+#### glm will trim to animals with the variables have
+#phen_long_to_use <- phen_long 
+
+### select comparisons to make: time1 - time2
+TimePoints_to_compare <- data.frame(
+  "time1"=c("day0","week05","week12","week21"),
+  
+  "time2"=c(CWT_vsX,CWT_vsX,CWT_vsX,CWT_vsX))
+
+
+
+### combos in descending order
+pairwise_week_combos <- paste0(c("week21vs","week12vs","week05vs","week02vs","day0vs"),CWT_vsX)
+```
+
+
+```{r CWT_glm_pairwise_byTime, include = FALSE}
+
+#### uses raw data not FC
+phen_trim <- phen_long_to_use[which(phen_long_to_use$variable %in% vars_to_use),]
+
+### make data wide
+df_wide <- phen_long_to_use[which(phen_long_to_use$variable %in% vars_to_use),c("Animal_ID","TimePoint","Treatment_virus_compartment","variable","amount")] %>%
+  #### combine TimePoint and variable
+  unite(col = "var_tp", c("variable","TimePoint"), sep ="_", remove = TRUE) %>%
+  ### remove)
+  pivot_wider(names_from = "var_tp", values_from = "amount") 
+
+######## calculate glm
+
+list_of_df_delta <- list()
+list_of_TIME_pval_dfs <- list()
+
+for (g in unique(df_wide$Treatment_virus_compartment)){
+  ### trim to include only the group of interest
+  curr_phen <- phen_trim[which(phen_trim$Treatment_virus_compartment %in% g),]
+  
+  ##### sample, metadata names, value and TimePoint for each variable
+  var_TimePoints_long <- curr_phen[,c("Animal_ID","TimePoint","Treatment_virus_compartment","variable","amount")] %>%
+    ### remove rows with missing amount
+    dplyr::filter(!is.na(amount))
+  
+  ##### see how many TimePoints per variable (but not which TimePoints or what the values are)
+  TimePoints_per_var <- data.frame(data.matrix(table(var_TimePoints_long$variable)/length(unique(curr_phen$Animal_ID)))) %>%
+    rownames_to_column("variable") #%>%
+  #rename(Num_TimePoints = 2) #not working
+  colnames(TimePoints_per_var) <- c("variable","Num_TimePoints")
+  
+  ##### see how many TimePoints per variable and values for each TimePoint
+  var_TimePoints <- var_TimePoints_long %>%
+    pivot_wider(names_from = "TimePoint", values_from = "amount") %>%
+    dplyr::left_join(TimePoints_per_var, by = "variable") %>%
+    filter(Num_TimePoints > 1) ## remove variables with single TimePoint (not necessary)
+  
+  df_delta_per_group <- data.frame("Animal_ID"=unique(var_TimePoints$Animal_ID))
+  
+  ## prep pvaldf
+  p_value_df2 <- data.frame("rowname" = unique(var_TimePoints$variable))
+  
+  for (npt in 1:dim(TimePoints_to_compare)[1]){
+    ### select variables with both TimePoints
+    curr_vars <- intersect(var_TimePoints_long$variable[which(var_TimePoints_long$TimePoint == TimePoints_to_compare$time1[npt])], 
+                           var_TimePoints_long$variable[which(var_TimePoints_long$TimePoint == TimePoints_to_compare$time2[npt])])
+    
+    ##### only if have any of these variables
+    if(length(curr_vars) > 0){
+      
+      
+      ### generate dataframe: rows = samples, columns = variables and group (= TimePoint)
+      curr_df <- var_TimePoints_long %>% 
+        pivot_wider(names_from = "variable", values_from = "amount")
+      #trim to only the 2 TimePoints, will remove vars without these TimePoint
+      curr_df2 <- curr_df[,c(setdiff(colnames(curr_df),unique(var_TimePoints_long$variable)),curr_vars)] %>% # only columns with both TimePoints
+        filter(TimePoint %in% c(TimePoints_to_compare$time1[npt],TimePoints_to_compare$time2[npt])) # only rows with Pre or npt
+      
+      
+      
+          # 
+      ############## prep for glm
+      #factorize TimePoint
+      curr_df2$TimePoint_f <- factor(curr_df2$TimePoint, c(TimePoints_to_compare$time2[npt],TimePoints_to_compare$time1[npt]))
+      
+      ###### must factorize ID
+      curr_df2$ID_f <- factor(curr_df2$Animal_ID)
+      ###### must be sorted by ID
+      curr_df2 <- curr_df2[order(curr_df2$ID_f),]
+      
+      #### generate assay matrix with only variables to test
+      curr_variable_mat <- as.matrix(data.matrix(curr_df2[,curr_vars])) ## ensures values will be numeric
+      
+      
+      #rownames(curr_variable_mat) <- curr_df2$ID
+      ############## run glm
+      # ## single test
+      # curr_lm <- geeglm(scale(curr_variable_mat[,"CCL8"]) ~ TimePoint_f, id=ID_f, data = curr_df2, family="gaussian", corstr="exchangeable")
+      # summary(curr_lm)
+      # ### also tried other families, binomial requires y values 0 -1, poisson can't have negative values --> gaussian it is!
+      
+      # coef(summary(curr_lm))[2,'Pr(>|W|)'] #pull p value
+      # coef(summary(curr_lm))[2,'Estimate'] #pull estimate
+      
+      ######### only for columns that are not all NAs
+      NA_columns_tp1 <- curr_df2[which(curr_df2$TimePoint == TimePoints_to_compare$time1[npt]),] %>% keep(~all(is.na(.x))) %>% names #https://www.statology.org/r-find-columns-with-all-na/
+      NA_columns_tp2 <- curr_df2[which(curr_df2$TimePoint == TimePoints_to_compare$time2[npt]),] %>% keep(~all(is.na(.x))) %>% names   
+      ####### also remove columns with all zeros for both timepoints
+      allZero_columns <- which(colSums(curr_df2[,intersect(colnames(curr_df2),curr_vars)]) == 0) %>% names
+      
+      ####### finally, remove columns with no animals that have both timepoints
+      noOverlap_columns <- c()
+      for(curr_v in intersect(colnames(curr_df2),curr_vars)){
+        animals_tp1 <- curr_df2[which(curr_df2$TimePoint == TimePoints_to_compare$time1[npt]),c("Animal_ID",curr_v)] %>%
+          dplyr::filter(!is.na(!!rlang::sym(curr_v)))
+        animals_tp2 <- curr_df2[which(curr_df2$TimePoint == TimePoints_to_compare$time2[npt]),c("Animal_ID",curr_v)] %>%
+          dplyr::filter(!is.na(!!rlang::sym(curr_v)))
+        if(length(intersect(animals_tp1$Animal_ID,animals_tp2$Animal_ID)) == 0){
+          noOverlap_columns <- c(noOverlap_columns,curr_v)
+        }else{
+          noOverlap_columns <- noOverlap_columns
+        }
+        
+      }
+      
+      nonNA_columns <- setdiff(setdiff(setdiff(setdiff(curr_vars, NA_columns_tp1), NA_columns_tp2),allZero_columns),noOverlap_columns)
+      
+      ### if there are any columns with data for both TimePoints, compute for those columns
+      if(length(nonNA_columns)>0){
+        new_variable_mat <- data.frame(curr_variable_mat[,nonNA_columns]) %>%
+          ### remove if all have identical value
+          select(where(~n_distinct(.) > 1)) %>%
+          as.matrix(.)
+        curr_p_raw <- apply(new_variable_mat, 2, function(x) coef(summary(geeglm(scale(x) ~ TimePoint_f, id=ID_f, data = curr_df2, family="gaussian", corstr="exchangeable")))[2,'Pr(>|W|)'])
+        curr_p_adj <- p.adjust(curr_p_raw, method = 'BH')
+        curr_est <- apply(new_variable_mat, 2, function(x) coef(summary(geeglm(scale(x) ~ TimePoint_f, id=ID_f, data = curr_df2, family="gaussian", corstr="exchangeable")))[2,'Estimate'])
+        
+        #### no singular errors = good!
+        
+        
+        
+        curr_p_df <- data.frame(curr_p_raw, curr_p_adj, curr_est) %>%
+          rownames_to_column()
+        
+        colnames(curr_p_df) <- c("rowname",
+                                 paste0(str_remove_all(TimePoints_to_compare$time1[npt],"_"),"vs",
+                                        str_remove_all(TimePoints_to_compare$time2[npt],"_"),"_pval"),
+                                 paste0(str_remove_all(TimePoints_to_compare$time1[npt],"_"),"vs",
+                                        str_remove_all(TimePoints_to_compare$time2[npt],"_"),"_adjpval"),
+                                 paste0(str_remove_all(TimePoints_to_compare$time1[npt],"_"),"vs",
+                                        str_remove_all(TimePoints_to_compare$time2[npt],"_"),"_est"))
+        
+        
+        
+        ###### if there are no columns with nonNA data for this TimePoint, then add nothing
+      }else{
+        curr_p_df <- data.frame("rowname"=curr_vars,
+                                "pval"=NA, 
+                                "adjpval"=NA,
+                                "est"=NA) 
+        colnames(curr_p_df) <- c("rowname",
+                                 paste0(str_remove_all(TimePoints_to_compare$time1[npt],"_"),"vs",
+                                        str_remove_all(TimePoints_to_compare$time2[npt],"_"),"_pval"),
+                                 paste0(str_remove_all(TimePoints_to_compare$time1[npt],"_"),"vs",
+                                        str_remove_all(TimePoints_to_compare$time2[npt],"_"),"_adjpval"),
+                                 paste0(str_remove_all(TimePoints_to_compare$time1[npt],"_"),"vs",
+                                        str_remove_all(TimePoints_to_compare$time2[npt],"_"),"_est"))
+        
+      }
+      
+      
+      p_value_df2 <- dplyr::full_join(p_value_df2, curr_p_df, by="rowname")
+      
+      
+    }else{
+      ###### if there are no columns with data for this TimePoint, then add nothing
+      p_value_df2 <- p_value_df2
+      
+    }
+    
+  }
+  
+  
+  ############# collect df deltas
+  list_of_df_delta[[g]] <- df_delta_per_group %>%
+    column_to_rownames("Animal_ID")
+  
+  
+  ############# format glm pvalues
+  
+  ## set sig figs
+  p_value_df3 <- p_value_df2 %>%
+    column_to_rownames() %>% #need to get this column out to make numeric
+    mutate_if(is.character, as.numeric) %>%
+    mutate_all(signif, 2) %>%
+    rownames_to_column("variable")
+  
+  ### generate columns for sig dir & compile to list for saving
+  tp_names <- paste0(TimePoints_to_compare$time1, "vs",TimePoints_to_compare$time2)
+  list_for_saving <- list()
+  
+  for(col in tp_names){
+    curr_adj <- paste0(col,"_adjpval")
+    curr_raw <- paste0(col,"_pval")
+    curr_est <- paste0(col,"_est")
+    ### only if this tp is present
+    if(length(which(grepl(col,colnames(p_value_df3)) == TRUE)) > 0){
+      curr_df <- p_value_df3[,grepl(col,colnames(p_value_df3))] %>%
+        ### rename to generic so can use mutate
+        dplyr::rename(raw=1,adj=2,est=3) %>%
+        dplyr::mutate(dir = ifelse(adj < 0.05, ifelse(est > 0, "up", "down"), 
+                            ifelse(adj > 0.05,"not_sig","no_test")),
+               raw_dir = ifelse(raw < 0.05, ifelse(est > 0, "up", "down"), 
+                                ifelse(raw > 0.05,"not_sig","no_test")))
+      ### add to master
+      p_value_df3[,paste0(col,"_dir")] <- curr_df$dir
+      p_value_df3[,paste0(col,"_raw_dir")] <- curr_df$raw_dir
+    }
+    ### save to list
+    list_for_saving[[paste0(col)]] <- p_value_df3[,grepl(col, colnames(p_value_df3))]
+    
+  }
+  
+  ### also add full
+  list_for_saving[["full"]] <- p_value_df3
+  ### reorder to bring full to the first
+  list_for_saving <- list_for_saving[c("full", tp_names)]
+  
+  
+  list_of_TIME_pval_dfs[[g]] <- list_for_saving
+  
+  # openxlsx::write.xlsx(list_of_TIME_pval_dfs[[g]], 
+  #                      file = file.path(outputTABLES_dir,paste0(params$study_name,"_",var_name,"_list_of_TimepointVS",CWT_vsX,"_glm_pvalest_",
+  #                                                               str_remove_all(g,"-"),".xlsx")), rowNames=T, overwrite=T)
+  # 
+  
+}
+
+
+# 
+# saveRDS(list_of_TIME_pval_dfs, file = file.path(outputRData_dir,paste0(params$study_name,"_",var_name,"_list_of_TimepointVS",CWT_vsX,"_glm_pvalest_OneGroupAtATime.rds")))
+# 
+
+
+
+
+############ now compare groups
+
+#### generate combined pval dataframe
+pval_list <- list()
+for(g in unique(df_wide$Treatment_virus_compartment)){
+  pval_1 <- list_of_TIME_pval_dfs[[g]][["full"]] %>%
+    column_to_rownames("variable")
+  if(dim(pval_1)[2]!=0){
+      colnames(pval_1) <- paste0(g,"__",colnames(pval_1)) 
+  pval_1 <- pval_1 %>%
+    rownames_to_column()
+  }
+
+  pval_list[[g]] <- pval_1
+  
+}
+
+pvals_notZero <- names(pval_list)[which(lengths(pval_list) != 0)]
+pval_combo <- pval_list[[pvals_notZero[1]]]
+
+
+for(i in 2:length(pvals_notZero)){
+      pval_combo <- pval_combo %>%
+    dplyr::full_join(pval_list[[pvals_notZero[i]]], by = "rowname")
+}
+pval_combo <- pval_combo %>%
+  column_to_rownames()
+
+# saveRDS(pval_combo, file = file.path(outputRData_dir,paste0(params$study_name,"_",var_name,"_combo_untrimmed_VS",CWT_vsX,"_glm_pvalest_OneGroupAtATime.rds")))
+
+list_of_stats[[paste0(fig_name,"_glmVs",CWT_vsX)]] <- pval_combo %>%
+  rownames_to_column("variable")
+
+```
+
+
+
+```{r MW_3Group_levels_calculate, results='asis', fig.height=12, fig.width=7}
+# ### Differences between groups (LEVELS) {.tabset}
+# 
+# Within each timepoint, which assays are different between treatment/virus groups?
+# 
+# *Mann-Whitney/Wilcoxon test among levels for each pairwise group comparison*
+# 
+
+
+levels_or_FC <- "levels"
+### trim to only the current variables 
+curr_phen_long <- phen_long_to_use[which(phen_long_to_use$variable %in% vars_to_use),]
+
+compartments_have <- unique(curr_phen_long$Compartment)
+
+
+for(comp in compartments_have){
+  #### select animals with this compartment
+  curr_animals <- unique(curr_phen_long$Animal_ID[which(curr_phen_long$Compartment == comp)])
+  ### tmp is the *inverted* wide df with each variable being tested in rows and columns = animal_ID
+  ### Treatment_virus as group to test across, gets added in the MWfxn
+  ### NOTE tmp should already be trimmed to the compartment such that 3 groups are the only variable to test across (for each timepoint)
+  tmp <- curr_phen_long[which(curr_phen_long$Compartment == comp),c("variable","Animal_ID","TimePoint","amount")] %>%
+    dplyr::mutate(var_time = paste0(variable,"xx__",TimePoint),
+                  variable = NULL,
+                  TimePoint = NULL) %>%
+    ### pivot wider
+    tidyr::pivot_wider(names_from = "Animal_ID", values_from = "amount") %>%
+    column_to_rownames("var_time") %>%
+    #### remove rows with zero variation across samples
+    dplyr::filter(if_any(curr_animals[!grepl("TMN",curr_animals)], ~.x != TMN)) 
+  
+  ### will get added on to outputs
+ # name_to_use <- paste0(var_name,"_",comp)
+  name_to_use <- paste0(fig_name,"_MW_",comp)
+  
+  
+  #### if you have any samples
+  if(dim(tmp)[1] > 0){
+    
+    #### perform test
+    MW_3Group_fxn(tmp, name_to_use, levels_or_FC)
+    
+    ### collect unique timepoints for this var set /compartment
+    tps_for_thisSet <- unique(curr_phen_long[which(curr_phen_long$Compartment == comp),c("TimePoint")])
+  }
+  
+}
+    
+```
+
+
+```{r SFig2_prep}
+fig_to_use <- paste0("SFigS2",shortName_for_wtBatch)
+###### select group/tp from CWT analysis
+### treatment virus comp
+TVC_selected <- c("No_depletion__HTLV-1ACoI-L__Blood","Triple_depletion__HTLV-1ACoI-L__Blood")
+TVshort_selected <- c("NoMut","TriMut")
+### timepoint intervals e.g. weekXXvsweek00
+intervals_selected <- c("day0vsweek00")
+
+###### select group/tp from MW levels analysis
+contrasts_selected <- "TriMutvsNoMut" ## should be only one contrast at a time
+comp <- "Blood"
+timepoints_selected <- c("week00","day0")
+name_to_use <- paste0(var_name,"_",comp)
+
+
+###### set shapes from shape_values_to_use
+shapes_to_use <- shape_values_to_use[1:(4+num_Chi_animals)]
+
+###### set pairs to add p-values for, have short names
+#group 1 - group 2
+group_tp_to_compare <- data.frame(
+  "group1"=c(
+    "NoMut__week00",
+    "TriMut__week00",
+    "NoMut__week00",
+    "NoMut__day0"
+    ),
+  "group2"=c(
+    "NoMut__day0",
+    "TriMut__day0",
+    "TriMut__week00",
+    "TriMut__day0"
+  ),
+  "name"=c(
+    "NoMut_day0vsweek00",
+    "TriMut_day0vsweek00",
+    "TriMutvsNoMut_week00",
+    "TriMutvsNoMut_day0"
+  )
+  
+)
+
+
+
+num_columns_for_plot <- 5
+#### plot the sig p or all p
+plot_sig_only <- "no"
+column_to_colorby <- "Treatment"
+column_to_colorby_order <- c("No_depletion","Triple_depletion")
+column_to_colorby_colors <- c("turquoise3","magenta2")
+
+#### set order/names for variables
+variable_order_df <- data.frame("variable"=c("CD3_CD8_absolute_count",
+                                         "CD3_CD8_Frequency",
+                                         "CD45_NKG2a_Frequency",
+                                         "Monocyte_absolute_count",
+                                         "Monocyte_Frequency",
+                                         "CD3_CD4_absolute_count",
+                                         "CD3_CD4_Frequency",
+                                         "Lymphocytes",
+                                         "CD20_",
+                                         "Neutrophiles_absolute_count",
+                                        "eosinophil"),
+                                
+                                "good"=c("CD3+CD8+ (Absolute count)",
+                                         "CD3+CD8+ (Frequency)",
+                                         "CD45+NKG2A+ (Frequency)",
+                                         "Monocyte (Absolute count)",
+                                         "Monocyte (Frequency)",
+                                         "CD3+CD4+ (Absolute count)",
+                                         "CD3+CD4+ (Frequency)",
+                                         "Lymphocytes (Absolute count)",
+                                         "CD20+ (Absolute count)",
+                                         "Neutrophil (Absolute count)",
+                                         "Eosinophil (Absolute count)")
+)
+
+```
+
+
+``` {r ScatterPlots_BroadcellPops, results = "asis", fig.width = 10, fig.height=9}
+#### load changed with time glm pvalues
+cwt_df <- list_of_stats[[paste0(fig_name,"_glmVs",CWT_vsX)]] %>%
+  column_to_rownames("variable") %>%
+  ### trim to only the selected group/timepoint
+  dplyr::select(starts_with(TVC_selected)) %>%
+  dplyr::select(contains(paste0(intervals_selected))) %>%
+  dplyr::select(ends_with("_pval") | ends_with("_est"))
+
+pval_cwt <- cwt_df %>%
+  dplyr::select(ends_with("_pval"))
+  ### simplify colnames
+if(length(intervals_selected) == 1){
+  colnames(pval_cwt) <- c(paste0(TVshort_selected,"_",intervals_selected))
+}else{
+  new_colnames <- c()
+  for(int in 1:length(intervals_selected)){
+    curr_names <- paste0(TVshort_selected,"_",intervals_selected[int])
+    new_colnames <- c(new_colnames,curr_names)
+                         
+  }
+  colnames(pval_cwt) <- new_colnames
+}
+
+
+
+  pval_cwt <- pval_cwt %>%
+  rownames_to_column()
+
+
+###### load MW differences between groups levels
+MWlevels_df <- list_of_stats[[paste0(fig_name,"_MW_",comp,"_",levels_or_FC)]] %>%
+  column_to_rownames("variable_time") %>%
+  ### trim to only the selected group/timepoint
+  dplyr::select(starts_with(paste0(contrasts_selected,"_p_raw")) |
+                  starts_with(paste0(contrasts_selected,"_est")))
+
+
+###### for each contrast_selected
+### prep dataframe
+pval_MWlevels <- data.frame("rowname"=unique(str_before_first(rownames(MWlevels_df),"xx__")))
+
+for(contrast_selected in contrasts_selected){
+  curr_pval_MWlevels <- MWlevels_df %>%
+  dplyr::select(starts_with(paste0(contrast_selected,"_p_raw"))) %>%
+  dplyr::rename(pval = 1) %>%
+  rownames_to_column() %>%
+  dplyr::filter(grepl(paste(timepoints_selected, collapse = '|'), rowname)) %>%
+  ### separate time from variable
+  dplyr::mutate(time = str_after_first(rowname,"xx__"),
+                var = str_before_first(rowname,"xx__"),
+                rowname = NULL) %>%
+  tidyr::pivot_wider(id_cols = var, names_from = "time", values_from = "pval") %>%
+  column_to_rownames("var") %>%
+  `colnames<-`(c(paste0(contrast_selected,"_",timepoints_selected))) %>%
+  rownames_to_column()
+  
+  pval_MWlevels <- dplyr::left_join(pval_MWlevels, curr_pval_MWlevels, by = "rowname")
+
+}
+
+
+
+pval_combined <- dplyr::full_join(pval_cwt,pval_MWlevels, by = "rowname") %>%
+  ### trim to ordered variables
+  dplyr::rename(variable=rowname) %>%
+  dplyr::filter(variable %in% variable_order_df$variable) %>%  dplyr::left_join(variable_order_df, by = "variable") %>%
+  column_to_rownames("good")
+
+### save as the trimmed FigS2 or S4
+list_of_stats[[paste0(fig_to_use)]] <- pval_combined %>%
+  dplyr::mutate_all(~replace(., is.nan(.), "no variation"))
+
+### also generate for dir to color the brackets
+dir_cwt <- cwt_df %>%
+  dplyr::select(ends_with("_est"))
+  ### simplify colnames
+if(length(intervals_selected) == 1){
+  colnames(dir_cwt) <- c(paste0(TVshort_selected,"_",intervals_selected))
+}else{
+  new_colnames <- c()
+  for(int in 1:length(intervals_selected)){
+    curr_names <- paste0(TVshort_selected,"_",intervals_selected[int])
+    new_colnames <- c(new_colnames,curr_names)
+                         
+  }
+  colnames(dir_cwt) <- new_colnames
+}
+
+
+
+  dir_cwt <- dir_cwt %>%
+  rownames_to_column()
+
+
+
+###### for each contrast_selected
+### prep dataframe
+dir_MWlevels <- data.frame("rowname"=unique(str_before_first(rownames(MWlevels_df),"xx__")))
+
+for(contrast_selected in contrasts_selected){
+
+curr_dir_MWlevels <- MWlevels_df %>%
+  dplyr::select(starts_with(paste0(contrast_selected,"_est"))) %>%
+  dplyr::rename(pval = 1) %>%
+  rownames_to_column() %>%
+  dplyr::filter(grepl(paste(timepoints_selected, collapse = '|'), rowname)) %>%
+  ### separate time from variable
+  dplyr::mutate(time = str_after_first(rowname,"xx__"),
+                var = str_before_first(rowname,"xx__"),
+                rowname = NULL) %>%
+  tidyr::pivot_wider(id_cols = var, names_from = "time", values_from = "pval") %>%
+  column_to_rownames("var") %>%
+  `colnames<-`(c(paste0(contrast_selected,"_",timepoints_selected))) %>%
+  rownames_to_column()
+
+  dir_MWlevels <- dplyr::left_join(dir_MWlevels, curr_dir_MWlevels, by = "rowname")
+
+}
+
+
+
+dir_combined <- dplyr::full_join(dir_cwt,dir_MWlevels, by = "rowname") %>%
+  ### trim to ordered variables
+  dplyr::rename(variable=rowname) %>%
+  dplyr::filter(variable %in% variable_order_df$variable) %>%  dplyr::left_join(variable_order_df, by = "variable") %>%
+  column_to_rownames("good")
+
+
+
+## modify table to be format needed by stat_pvalue_manual
+
+list_of_pvals <- list()
+for (i in variable_order_df$good){
+  pval_df <- data.frame()
+  for (g in 1:nrow(group_tp_to_compare)){
+    curr_df <- data.frame("group1"=group_tp_to_compare[g,"group1"],
+                          "group2"=group_tp_to_compare[g,"group2"],
+                          "p"=pval_combined[i,group_tp_to_compare[g,"name"]])
+    pval_df <- rbind(pval_df, curr_df)
+  }
+  list_of_pvals[[i]] <- pval_df
+}
+
+
+
+#### prep phen_to_plot
+## set factor orders
+if(length(TVshort_selected) == 3){
+   treat_time_factor_order <- c(paste0(TVshort_selected[1],"__",timepoints_selected),paste0(TVshort_selected[2],"__",timepoints_selected),paste0(TVshort_selected[3],"__",timepoints_selected))
+
+}else{
+ treat_time_factor_order <- c(paste0(TVshort_selected[1],"__",timepoints_selected),paste0(TVshort_selected[2],"__",timepoints_selected))
+
+}
+
+#### add additional factorized vars
+phen_to_plot <- phen_long_to_use %>%
+  ### filter variables
+  dplyr::filter(variable %in% variable_order_df$variable) %>%
+  ### filter TVC
+  dplyr::filter(Treatment_virus_compartment %in% TVC_selected) %>%
+  ### filter timepoints
+  dplyr::filter(TimePoint %in% timepoints_selected) %>%
+  ### select columns
+  dplyr::select(c(Animal_ID,variable,TimePoint,Treatment_virus_compartment,!!rlang::sym(column_to_colorby),amount)) %>%
+  ## add good variable names & order
+  dplyr::left_join(variable_order_df, by = "variable") %>%
+  dplyr::mutate(good = factor(good, variable_order_df$good),
+                #variable = NULL
+                ) %>%
+  dplyr::arrange(good) %>%
+  ### make wider
+  tidyr::pivot_wider(names_from = "good", values_from = "amount") %>%
+  ### shorten Treatment_virus
+  #dplyr::left_join(data.frame("Treatment_virus"=TVC_selected,"short"=TVshort_selected))
+  dplyr::mutate(Treatment_virus = factor(ifelse(Treatment_virus_compartment == TVC_selected[1],
+                                                TVshort_selected[1],
+                                                ifelse(Treatment_virus_compartment == TVC_selected[2],
+                                                       TVshort_selected[2],
+                                                       TVshort_selected[3])),TVshort_selected),
+                colorColumn = factor(!!rlang::sym(column_to_colorby),column_to_colorby_order),
+                treat_time = factor(paste0(Treatment_virus,"__",TimePoint), treat_time_factor_order)) %>%
+  ## sort by group & animal
+  dplyr::arrange(treat_time,Animal_ID) %>% 
+## set animal factor
+dplyr::mutate(Animal_ID = factor(Animal_ID, unique(Animal_ID))) 
+
+
+
+#### list of plots with each variable separately
+list_of_plots <- list()
+for (i in variable_order_df$good){
+  # cat("##### ",paste0(i," "),"\n")
+  # cat("\n")
+  max_y <- max(phen_to_plot[,i], na.rm=TRUE)
+  min_y <- min(phen_to_plot[,i], na.rm=TRUE)
+  range_y <- max_y-min_y
+  num_contrasts <- ifelse(plot_sig_only =="no",
+                          nrow(group_tp_to_compare),
+                          length(which(pval_combined[i,] %>% dplyr::select(-variable) < 0.05))
+  )
+  maxy_y_to_plot <- ifelse(plot_sig_only =="no",
+                                  max_y*(1+0.13*(num_contrasts+1)),
+                                  max_y*(1+0.15*(num_contrasts+1))
+                                         
+                                         )
+  
+  length_colorby_column1 <- (length(which(phen_to_plot[,column_to_colorby] == column_to_colorby_order[1])))/(length(variable_order_df$good)*length(timepoints_selected))
+  
+    length_colorby_column2 <- (length(which(phen_to_plot[,column_to_colorby] == column_to_colorby_order[2])))/(length(variable_order_df$good)*length(timepoints_selected))
+  
+    length_colorby_column3 <- (length(which(phen_to_plot[,column_to_colorby] == column_to_colorby_order[3])))/(length(variable_order_df$good)*length(timepoints_selected))
+  
+                         
+  
+  #### base plot
+  p <- ggplot(phen_to_plot, aes(x = treat_time, y = !!rlang::sym(i), group = Animal_ID), fill = colorColumn) + 
+    scale_fill_manual(name = paste0(column_to_colorby, " (color)"), values=column_to_colorby_colors) +  
+    scale_color_manual(values=column_to_colorby_colors) +  
+    scale_shape_manual(name=paste0("Animal (shape)"), values=shapes_to_use) +
+    geom_line()+
+    geom_point(aes(
+      fill=colorColumn,
+      color=colorColumn,
+      shape=Animal_ID,
+    ), size = 3, stroke = 0.8, alpha = 0.7)+
+    
+    guides(fill=guide_legend(override.aes=list(shape=21,color=column_to_colorby_colors)),
+           shape=guide_legend(override.aes=list(
+             
+             fill=c(rep(column_to_colorby_colors[1],length_colorby_column1),rep(column_to_colorby_colors[2],length_colorby_column2),rep(column_to_colorby_colors[3],length_colorby_column3)),
+                                                
+             color=c(rep(column_to_colorby_colors[1],length_colorby_column1),rep(column_to_colorby_colors[2],length_colorby_column2),rep(column_to_colorby_colors[3],length_colorby_column3)))),
+           color=FALSE)+ ### change shape in legend to have fillable quality, remove duplicate border legend 
+    #geom_text_repel() + 
+    scale_y_continuous(limits = c(min_y*(0.8),maxy_y_to_plot))+
+    
+    #rremove("x.axis")+  
+    theme_bw()+
+    labs(y = paste0(i)#,
+         #title = paste0(i)
+    )+
+    theme(legend.position="right", legend.box = "horizontal",
+          #axis.ticks.x = element_blank(),
+          axis.title.x = element_blank(), 
+          #axis.text.x = element_blank(),
+          plot.title = element_text(hjust = 0.5), #centers title
+          panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+          panel.border = element_blank(), axis.line = element_line(colour = "black")
+    )
+  
+  box_pval_cut <- 0.05
+  
+  ##### add p values
+  ### if plotting all p
+if(plot_sig_only == "no"){
+
+  
+  for(l in 1:num_contrasts){
+     p <- p +
+        stat_pvalue_manual(list_of_pvals[[i]][l,], label = "p",size = 2.5,
+                           y.position = c(max_y+0.15*l*range_y), bracket.size = 0.2,
+                           color = list(ifelse(pval_combined[which(rownames(pval_combined) == i),paste0(group_tp_to_compare$name[l])] < as.double(box_pval_cut),
+                                               ifelse(dir_combined[which(rownames(dir_combined) == i),paste0(group_tp_to_compare$name[l])] > 0,"red", "blue"), "black")) #if p is sig, green
+        )
+  }
+  
+}else{
+ 
+  # if there are any sig contrasts
+  if(num_contrasts > 0){
+     ## trim to sig contrasts
+        sig_pvals <- list_of_pvals[[i]][which(list_of_pvals[[i]][,"p"]  < 0.05),] %>%
+          ### add name
+        dplyr::left_join(group_tp_to_compare, by =c("group1","group2"))
+        
+    for(l in 1:nrow(sig_pvals)){
+     # if(pval_combined[which(rownames(pval_combined) == i),paste0(sig_comp_pairs_df$name[l])] < as.double(box_pval_cut)){
+        p <- p +
+          stat_pvalue_manual(sig_pvals[l,], label = "p",size = 2.5,
+                             y.position = c(max_y+0.15*l*range_y), bracket.size = 0.2,
+                             color =list(ifelse(dir_combined[which(rownames(dir_combined) == i),paste0(sig_pvals$name[l])] > 0,"red", "blue")) #if up red, down blue
+                             )
+                             
+    #  }else{
+    #    p <- p
+    #  }
+        }
+      
+      
+  }else{
+    p <- p
+  }   
+
+  
+}
+    
+ 
+     p1 <- p+
+      scale_x_discrete(breaks=c(levels(phen_to_plot$treat_time)),
+                       labels=rep(timepoints_selected,length(TVshort_selected)))+
+      #labs(x="TimePoint")+
+      theme(axis.text.x = element_text(angle=45, hjust = 1))
+    
+   
+  
+  # plot(p1)
+  
+  list_of_plots[[i]] <- p1+ theme(legend.position="none")
+  
+  
+  
+  cat("\n")
+  cat(' \n \n') ### this is the key!
+  
+}
+
+### get the legend
+#https://stackoverflow.com/questions/13649473/add-a-common-legend-for-combined-ggplots
+g_legend<-function(a.gplot){
+  tmp <- ggplot_gtable(ggplot_build(a.gplot))
+  leg <- which(sapply(tmp$grobs, function(x) x$name) == "guide-box")
+  legend <- tmp$grobs[[leg]]
+  return(legend)}
+
+### empty filler
+list_of_plots[[length(rownames(pval_combined))+1]]<-ggplot() + theme_void()
+list_of_plots[[length(rownames(pval_combined))+2]]<-g_legend(p1) ### grabs from the last plot
+
+do.call("grid.arrange",c(list_of_plots, ncol=num_columns_for_plot))
+
+
+ 
+      ### save values plotted
+list_of_plotted[[paste0(fig_to_use)]] <- phen_to_plot[,c("Animal_ID","Treatment_virus_compartment","TimePoint",variable_order_df$good)] %>%
+  group_by(Animal_ID,Treatment_virus_compartment,TimePoint) %>%
+  summarize_all(sum, na.rm = TRUE)
+
+
+```
+
+
+
+
+## HTLV-1ACoI-L vs HTLV-1A_WT: broad cell populations (Supp Fig 4) , including no depletion {.tabset}
+
+only p < 0.05 are shown for clarity
+
+
+<span style="color:red;">red p value: left timepoint/group is higher than right timepoint/group </span>
+
+
+<span style="color:blue;">blue p value: left timepoint/group is lower than right timepoint/group </span>
+
+
+
+```{r SFig4_prep}
+fig_to_use <- paste0("SFigS4_",shortName_for_wtBatch)
+###### select group/tp from CWT analysis
+### treatment virus comp
+TVC_selected <- c("No_depletion__HTLV-1ACoI-L__Blood","Triple_depletion__HTLV-1ACoI-L__Blood","Triple_depletion__HTLV-1A_WT__Blood")
+TVshort_selected <- c("NoMut","TriMut","TriWT")
+### timepoint intervals e.g. weekXXvsweek00
+intervals_selected <- c("day0vsweek00","week05vsweek00","week12vsweek00","week21vsweek00")
+
+###### select group/tp from MW levels analysis
+contrasts_selected <- c("TriMutvsNoMut","TriWTvsNoMut","TriMutvsTriWT") ## should be only one contrast at a time
+comp <- "Blood"
+timepoints_selected <- c("week00","day0","week05","week12","week21")
+name_to_use <- paste0(var_name,"_",comp)
+
+###### set pairs to add p-values for, have short names
+#group 2 - group 1
+group_tp_to_compare <- data.frame(
+  "group1"=c(
+    ### within NoMut
+    "NoMut__week00",
+    "NoMut__week00",
+    "NoMut__week00",
+    "NoMut__week00",
+    ### within TriMut
+    "TriMut__week00",
+    "TriMut__week00",
+    "TriMut__week00",
+    "TriMut__week00",
+    ### within TriWT
+    "TriWT__week00",
+    "TriWT__week00",
+    "TriWT__week00",
+    "TriWT__week00",
+    ### TriMut vs NoMut
+    "NoMut__week00",
+    "NoMut__day0",
+    "NoMut__week05",
+    "NoMut__week12",
+    "NoMut__week21",
+    ### TriWT vs NoMut
+    "NoMut__week00",
+    "NoMut__day0",
+    "NoMut__week05",
+    "NoMut__week12",
+    "NoMut__week21",
+    ### TriMut vs TriWT
+    "TriWT__week00",
+    "TriWT__day0",
+    "TriWT__week05",
+    "TriWT__week12",
+    "TriWT__week21"
+    ),
+  "group2"=c(
+     ### within NoMut
+    "NoMut__day0",
+    "NoMut__week05",
+    "NoMut__week12",
+    "NoMut__week21",
+     ### within TriMut
+    "TriMut__day0",
+    "TriMut__week05",
+    "TriMut__week12",
+    "TriMut__week21",
+    ### within TriWT
+    "TriWT__day0",
+    "TriWT__week05",
+    "TriWT__week12",
+    "TriWT__week21",
+   ### TriMut vs NoMut
+    "TriMut__week00",
+    "TriMut__day0",
+    "TriMut__week05",
+    "TriMut__week12",
+    "TriMut__week21",
+    ### TriWT vs NoMut
+    "TriWT__week00",
+    "TriWT__day0",
+    "TriWT__week05",
+    "TriWT__week12",
+    "TriWT__week21",
+    ### TriMut vs TriWT
+    "TriMut__week00",
+    "TriMut__day0",
+    "TriMut__week05",
+    "TriMut__week12",
+    "TriMut__week21"
+    
+    
+  ),
+  "name"=c(
+    ### within NoMut
+    "NoMut_day0vsweek00",
+    "NoMut_week05vsweek00",
+    "NoMut_week12vsweek00",
+    "NoMut_week21vsweek00",
+    ### within TriMut
+    "TriMut_day0vsweek00",
+    "TriMut_week05vsweek00",
+    "TriMut_week12vsweek00",
+    "TriMut_week21vsweek00",
+    ### within TriWT
+    "TriWT_day0vsweek00",
+    "TriWT_week05vsweek00",
+    "TriWT_week12vsweek00",
+    "TriWT_week21vsweek00",
+    ### TriMut vs NoMut
+    "TriMutvsNoMut_week00",
+    "TriMutvsNoMut_day0",
+    "TriMutvsNoMut_week05",
+    "TriMutvsNoMut_week12",
+    "TriMutvsNoMut_week21",
+    ### TriWT vs NoMut
+    "TriWTvsNoMut_week00",
+    "TriWTvsNoMut_day0",
+    "TriWTvsNoMut_week05",
+    "TriWTvsNoMut_week12",
+    "TriWTvsNoMut_week21",
+    ### TriMut vs TriWT
+    "TriMutvsTriWT_week00",
+    "TriMutvsTriWT_day0",
+    "TriMutvsTriWT_week05",
+    "TriMutvsTriWT_week12",
+    "TriMutvsTriWT_week21"
+  )
+  
+)
+
+###### set shapes from shape_values_to_use, putting WT first  -- for no no_depletion
+# shapes_to_use <- c(shape_values_to_use[(5+num_Chi_animals):length(shape_values_to_use)],
+#                    shape_values_to_use[5:(5+num_Chi_animals)])
+
+#### since including 
+shapes_to_use <- shape_values_to_use
+
+num_columns_for_plot <- 3
+#### plot the sig p or all p
+plot_sig_only <- "yes"
+# column_to_colorby <- "Virus"
+# column_to_colorby_order <- c("HTLV-1A_WT","HTLV-1ACoI-L")
+# column_to_colorby_colors <- c("palegreen","seagreen4")
+
+column_to_colorby <- "Treatment_virus"
+column_to_colorby_order <- c("NoMut","TriMut","TriWT") ## simp names
+column_to_colorby_colors <- c("turquoise3","seagreen4","palegreen")
+
+
+#### set order/names for variables
+variable_order_df <- data.frame("variable"=c("CD3_CD8_absolute_count",
+                                         "CD3_CD8_Frequency",
+                                         "CD45_NKG2a_Frequency",
+                                         "Monocyte_absolute_count",
+                                         "Monocyte_Frequency",
+                                         "CD3_CD4_absolute_count",
+                                         "CD3_CD4_Frequency",
+                                         "Lymphocytes",
+                                         "CD20_",
+                                         "Neutrophiles_absolute_count"),
+                                
+                                "good"=c("CD3+CD8+ (Absolute count)",
+                                         "CD3+CD8+ (Frequency)",
+                                         "CD45+NKG2A+ (Frequency)",
+                                         "Monocyte (Absolute count)",
+                                         "Monocyte (Frequency)",
+                                         "CD3+CD4+ (Absolute count)",
+                                         "CD3+CD4+ (Frequency)",
+                                         "Lymphocytes (Absolute count)",
+                                         "CD20+ (Absolute count)",
+                                         "Neutrophil (Absolute count)")
+)
+```
+
+
+``` {r ScatterPlots_BroadcellPops___SFig4, ref.label=c('ScatterPlots_BroadcellPops'), results = "asis", fig.width = 18, fig.height=18}
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+```{r prep_CellSubsets_WTbatch1a2combo}
+######### trim to both WT batch1/2 only
+phen_long_to_use <- phen_long %>%
+    dplyr::filter(Treatment == "Triple_depletion") %>%
+  dplyr::filter(Virus == "HTLV-1ACoI-L" & Batch %in% c("batch1","batch2") |
+                  Virus == "HTLV-1A_WT" & Batch %in% c("batch1","batch2"))
+name_for_wtBatch <- "WT batch 1 & 2 combined"
+shortName_for_wtBatch <- "" ## no name needed since WT1a2 for all analyses
+
+#### WT first then DV1
+shape_values_to_use <- c(21,22,23,25,24,1,0,5,2,6,
+                         21,22,23,25,2)
+```
+
+
+## Cell subsets Differences between groups (Fig 3, Supp Fig 6, Supp Fig 7)  {.tabset}
+
+### Fig 3a DCs heatmap {.tabset}
+
+``` {r setVars___DCs}
+fig_name <- paste0("Fig3a_",shortName_for_wtBatch)
+vars_to_use <- DC_columns
+var_name <- "DCs"
+treatment_to_use <- "Triple_depletion"
+
+row_font_size <- 7
+row_font_size_trimmed <- 7
+levels_or_FC <- "levels"
+
+virus_order_to_use <- c("HTLV-1A_WT","HTLV-1ACoI-L")
+dir_names_order <- paste0("TriMutvsTriWT_dir")
+curr_treat_virus_factor_levels <- treat_virus_factor_levels
+```
+
+
+```{r MW_3Group_levels_calculate___DCs, ref.label=c('MW_3Group_levels_calculate'), results='asis', fig.height=12, fig.width=7}
+```
+
+
+
+``` {r CellSubsets_levels_heatmap, results = 'asis', fig.height = 8, fig.width = 8}
+
+for(comp in compartments_have){
+  
+    cat("#### ", paste0(comp," {.tabset}"),"\n")
+  cat("\n")
+  
+    curr_animals <- unique(curr_phen_long$Animal_ID[which(curr_phen_long$Compartment == comp)])
+  ### tmp is the *inverted* wide df with each variable being tested in rows and columns = animal_ID
+  ### Treatment_virus as group to test across, gets added in the MWfxn
+  ### NOTE tmp should already be trimmed to the compartment such that 3 groups are the only variable to test across (for each timepoint)
+  tmp <- curr_phen_long[which(curr_phen_long$Compartment == comp),c("variable","Animal_ID","TimePoint","amount")] %>%
+    dplyr::mutate(var_time = paste0(variable,"xx__",TimePoint),
+                  variable = NULL,
+                  TimePoint = NULL) %>%
+    ### pivot wider
+    tidyr::pivot_wider(names_from = "Animal_ID", values_from = "amount") %>%
+    column_to_rownames("var_time") %>%
+    #### remove rows with zero variation across samples
+    dplyr::filter(if_any(curr_animals[!grepl("TMN",curr_animals)], ~.x != TMN)) 
+  
+  name_to_use <- paste0(fig_name,"_MW_",comp)
+  
+########### prep for heatmap:
+#### columns = samples, rows = assay/timepoint
+ p_value_df1 <- list_of_stats[[paste0(name_to_use,"_",levels_or_FC)]] %>%
+   column_to_rownames("variable_time")
+  sig_assay_df <- p_value_df1 %>%
+    rownames_to_column() %>%
+    ### add factored timepoint
+    mutate(Time = factor(str_after_first(rowname,"xx__"), sort(tps_for_thisSet$TimePoint)),
+           variable = factor(str_before_first(rowname,"xx__"),vars_to_use)) %>%
+    dplyr::mutate_at(vars(ends_with("_dir")), factor, c("up, p < 0.05","up, p < 0.1","not_sig","down, p < 0.1","down, p < 0.05"))
+  
+#  dir_names_order <- paste0("TriMutvsTriWT_dir")
+  
+  ##### annotation for rows, first listed will be closest to the heatmap (right side of ann cols), last will be on the left edge of the plot
+  annotation_row = sig_assay_df[,c(rev(dir_names_order),"Time","variable","rowname")] %>%
+    ### add simpler rowname with out the annotation
+    #dplyr::mutate(rowname_clean = str_before_first(rowname,"xx__")) %>%
+    column_to_rownames() 
+  
+  
+  
+  ###### annotation for columns
+  annotation_col <- data.frame(unique(phen_long_to_use[,c("Animal_ID","Treatment","Compartment","Batch","Virus")])) %>%
+    dplyr::filter(Compartment == comp) %>%
+    rownames_to_column() %>%
+    ### trim to only the treatment using here
+    dplyr::filter(Treatment %in% treatment_to_use) %>%
+    dplyr::mutate(Treatment = factor(Treatment, c("No_depletion","Triple_depletion")),
+                  Batch = factor(Batch,c("batch1","batch2")),
+                  Virus = factor(Virus,virus_factor_levels),
+                  rowname = NULL) %>%
+    column_to_rownames("Animal_ID") %>%
+    dplyr::arrange(Treatment, Virus,Batch)
+  
+  #### set orders to use
+
+  
+   hm_orders_to_use <- list(
+    "by Assay, timepoint, dir"=c("variable","Time",dir_names_order),
+    "by timepoint, Assay, dir"=c("Time","variable",dir_names_order),
+    "by timepoint, dir, Assay"=c("Time",dir_names_order, "variable"),
+    "by dir, Assay, timepoint"=c(dir_names_order,"variable","Time"),
+    "by dir, timepoint, Assay"=c(dir_names_order,"Time","variable")
+  )
+  
+  
+  
+  
+  ######## set colors, breakscale
+  mycols = colorRampPalette(c("blue4","white","red4"))(1000)
+  #mycols = rev(colorRampPalette(brewer.pal(n=11, name = "RdYlBu"))(1000))
+  range = 2
+  breakscale <- c(-1*range,seq(-.9*range,.9*range, length.out=length(mycols)-1),1*range)
+  
+  ####### set annotation colors 
+  ### first for time
+  timepoints_df <- data.frame("tp"=c("week00","week05","week12","week21"),
+                              "color"=c("black",
+                                        "grey25",
+                                        "grey65",
+                                        "grey85")) %>%
+    ### add rows for vs not baseline
+    add_row(tp="week12VSweek05",color="khaki1") %>%
+    add_row(tp="week21VSweek12",color="khaki3") %>%
+    add_row(tp="week21VSweek05",color="khaki4") %>%
+    column_to_rownames("tp")
+    
+
+  
+  time_for_anncolors <- timepoints_df[sort(tps_for_thisSet$TimePoint),]
+  names(time_for_anncolors) <- sort(tps_for_thisSet$TimePoint)
+  
+  
+  ####
+  
+  annotation_colors=list(Treatment=c(No_depletion="turquoise2", Triple_depletion="magenta2"),
+                         Compartment=c(Blood="gold1",BAL="darkorange"),
+                         Batch=c(batch1="lemonchiffon1",batch2="lemonchiffon3"),
+                         Virus=c("HTLV-1ACoI-L"="seagreen4","HTLV-1A_WT"="palegreen"),
+                         
+                         Time=time_for_anncolors)
+  
+  ### add in dir colors
+  for(dir_name in dir_names_order){
+    annotation_colors[[dir_name]] <- c("up, p < 0.05"="red2","up, p < 0.1"="lightpink",not_sig="grey90",
+                                             "down, p < 0.1"="skyblue","down, p < 0.05"="blue2")
+  }
+           
+  
+  cat("##### ", paste0("untrimmed "),"\n")
+  cat("\n")
+  
+  
+ hmo <- "by timepoint, Assay, dir"
+    
+    cat(" ", paste0("ROWSCALED 
+"),"\n")
+    cat("\n")
+    
+    ### arrange rows by order to use
+    curr_ann_row1 <- dplyr::arrange(annotation_row,  annotation_row[,hm_orders_to_use[[hmo]]]) 
+    
+    tmp2 <- tmp[intersect(rownames(curr_ann_row1),rownames(tmp)),intersect(rownames(annotation_col),colnames(tmp))] %>%
+      ### remove columns with all NA
+      dplyr::select(where(function(.) any(!is.na(.))))
+    
+    
+    ### set the gaps for the rows from first element of orders, except if assay
+    if(hm_orders_to_use[[hmo]][1] != "Assay"){
+      gaps_df <- data.frame(table(curr_ann_row1[intersect(rownames(curr_ann_row1),rownames(tmp)),hm_orders_to_use[[hmo]][1]])) %>%
+        mutate(cumsum = cumsum(Freq))
+    }else{
+      gaps_df <- data.frame("cumsum"=c(0))
+    }
+    
+    #### gaps for columns
+    gaps_col_df_prep <- annotation_col[colnames(tmp2),] %>%
+      dplyr::mutate(treat_virus = paste0(Treatment,"__",Virus))
+    
+    gaps_col_df <- data.frame(table(gaps_col_df_prep$treat_virus)) %>%
+      dplyr::mutate(Var1 = factor(Var1, curr_treat_virus_factor_levels)) %>%
+      dplyr::arrange(Var1) %>%
+      dplyr::mutate(cumsum = cumsum (Freq))
+                      
+           #########***pick up here gaps don't fit                         
+    
+    
+    ### remove variable so not plotted
+    curr_ann_row <- curr_ann_row1%>%
+      dplyr::select(-variable)
+    
+    # 
+    mycols = colorRampPalette(c("blue4","white","red4"))(1000)
+    range = 2
+    breakscale <- c(-1*range,seq(-.9*range,.9*range, length.out=length(mycols)-1),1*range)
+    
+    hc <-
+      pheatmap(tmp2,
+               scale="row", 
+               na_col = "grey70",
+               cluster_cols=FALSE, 
+               cluster_rows = FALSE,
+               fontsize_row = row_font_size,
+               gaps_col = unique(gaps_col_df$cumsum),
+               gaps_row = unique(gaps_df$cumsum),
+               col=mycols, breaks=breakscale, 
+               clustering_method="ward.D2",
+               annotation_col = annotation_col, 
+               annotation_row = curr_ann_row,
+               annotation_colors = annotation_colors)
+    
+    
+    
+    cat("\n")
+    cat(' \n \n') ### this is the key!
+  
+
+ cat("##### ", paste0("trimmed, p < 0.05 {.active}"),"\n")
+  cat("\n")
+  
+  
+  ##### trim row annoation
+  ##### generate list to replace NAs with not_sig
+  replace_list <- list()
+  for(n in colnames(annotation_row)[grepl("vs",colnames(annotation_row))]){
+    replace_list[[paste0(n)]] <- "not_sig"
+  }
+  
+  annotation_row1 <- annotation_row %>%
+    ### fill in not_sig for NA
+    replace_na(replace_list) %>%
+       ### change p < 0.1 to not_sig
+    dplyr::mutate_at(vars(contains("dir")), ~str_replace_all(.,"up, p < 0.1","not_sig")) %>%
+        dplyr::mutate_at(vars(contains("dir")), ~str_replace_all(.,"down, p < 0.1","not_sig")) %>%
+   ### remove if not_sig
+    dplyr::filter(if_any(contains("dir"), ~ . != "not_sig")) %>%
+    ### refactorize dir
+    dplyr::mutate_at(vars(contains("dir")), ~factor(., c("up, p < 0.05","not_sig","down, p < 0.05"))) 
+  
+
+  
+   
+  
+  annotation_colors=list(Treatment=c(No_depletion="turquoise2", Triple_depletion="magenta2"),
+                         Virus=c("HTLV-1ACoI-L"="seagreen4","HTLV-1A_WT"="palegreen"),
+                         Batch=c(batch1="lemonchiffon1",batch2="lemonchiffon3"),
+                         Compartment=c(Blood="gold1",BAL="darkorange"),
+                         Time=time_for_anncolors)
+  
+  
+  for(curr_dir in dir_names_order){
+    annotation_colors[[paste0(curr_dir)]] <- c("up, p < 0.05"="red2",not_sig="white","down, p < 0.05"="blue2")
+  }
+  
+  
+  
+  
+  ######### only if have any sig rows to plot
+hmo <- "by timepoint, dir, Assay"
+      
+      cat(" ", paste0(" ROWSCALED
+"),"\n")
+      cat("\n")
+      
+      ### arrange rows by order to use
+      curr_ann_row1 <- dplyr::arrange(annotation_row1,  annotation_row1[,hm_orders_to_use[[hmo]]]) 
+      
+      tmp2_trim <- tmp2[rownames(curr_ann_row1),] %>%
+        ### remove columns with all NA
+        dplyr::select(where(function(.) any(!is.na(.))))
+      
+      ### set the gaps for the rows from first element of orders, except if assay
+      if(hm_orders_to_use[[hmo]][1] != "Assay"){
+        gaps_df <- data.frame(table(curr_ann_row1[,hm_orders_to_use[[hmo]][1]])) %>%
+          mutate(cumsum = cumsum(Freq))
+      }else{
+        gaps_df <- data.frame("cumsum"=c(0))
+      }
+      
+      ### remove variable so not plotted
+      # if(length(dir_names_order) == 1){
+      #     curr_ann_row <- curr_ann_row1 %>%
+      #   dplyr::select(-variable) %>%
+      #   ##change back to dir
+      #   dplyr::rename(dir=!!rlang::sym(dir_names_order)) 
+      # 
+      # }else{
+           curr_ann_row <- curr_ann_row1 %>%
+        dplyr::select(-variable) 
+  
+      #}
+        
+      
+      ### can't plot gaps
+      if(dim(tmp2_trim)[1] > 1){
+        gaps_to_plot<-unique(gaps_df$cumsum)
+      }else{
+        gaps_to_plot<-NULL
+      }
+      
+      
+      hc <-
+        pheatmap(tmp2_trim,
+                 scale="row", 
+                 na_col = "grey70",
+                 cluster_cols=FALSE, 
+                 cluster_rows = FALSE,
+                 fontsize_row = row_font_size_trimmed,
+                 gaps_col =unique(gaps_col_df$cumsum),
+                 gaps_row = gaps_to_plot,
+                 col=mycols, breaks=breakscale, 
+                 clustering_method="ward.D2",
+                 annotation_col = annotation_col, 
+                 annotation_row = curr_ann_row,
+                 annotation_colors = annotation_colors)
+      
+      
+      
+      cat("\n")
+      cat(' \n \n') ### this is the key!
+      
+      
+           cat("##### ", paste0("Table"),"\n")
+  cat("\n")
+  
+  
+  to_save <- tmp2_trim %>%
+    rownames_to_column() %>%
+    dplyr::mutate(rowname = str_remove_all(rowname,"xx")) %>%
+    column_to_rownames() %>%
+    t() %>%
+    data.frame() %>%
+        mutate_all(signif, 4) %>%
+    rownames_to_column("Animal_ID") %>%
+
+    dplyr::left_join(annotation_col %>%
+                       rownames_to_column("Animal_ID"),
+                     by = "Animal_ID") %>%
+    dplyr::relocate(Virus,Compartment,Treatment,Animal_ID) 
+  
+  
+  list_of_plotted[[paste0(fig_name,"_",comp,"_",shortName_for_wtBatch)]] <- to_save
+  
+  to_print <- to_save %>%
+    DT::datatable(extensions = 'Buttons',
+                  options = list(dom = 'Blfrtip',
+                                 buttons = c('copy', 'csv', 'excel', 'pdf', 'print'),
+                                 iDisplayLength = 50,
+                                 lengthMenu = list(c(10,25,50,-1),
+                                                   c(10,25,50,"All"))))
+
+  print(htmltools::tagList(to_print))
+
+
+
+      
+      
+      
+}
+
+     cat("\n")
+      cat(' \n \n') ### this is the key!
+
+    
+    
+
+```
+
+
+#### Scatterplots {.tabset}
+
+```{r scat_setup}
+#### set order
+curr_vars_for_plot <- c(sort(unique(curr_phen_long$variable)[!grepl("_",unique(curr_phen_long$variable))]),
+                        sort(unique(curr_phen_long$variable)[grepl("TNFa",unique(curr_phen_long$variable))]),
+                        sort(unique(curr_phen_long$variable)[grepl("IL8",unique(curr_phen_long$variable))]),
+                        sort(unique(curr_phen_long$variable)[grepl("IL10",unique(curr_phen_long$variable))]))
+limits_to_use <- c(-10,100)
+breaks_to_use <- c(0,25,50,75,100)
+labels_to_use <- c(0,25,50,75,100)
+y.pos_to_use <- limits_to_use[1]
+```
+
+
+``` {r CellSubsets_levels_Scatterplot, results = 'asis', fig.height = 12, fig.width = 6}
+# if(var_name == "cytokines"){
+#   compartments_have <- "Blood" ### not working for BAL since too many zeros
+# }else{
+#   compartments_have <- compartments_have
+# }
+for(comp in compartments_have){
+  
+  cat("##### ", paste0(comp," {.tabset}"),"\n")
+  cat("\n")
+  
+  ### sorted by time, then alphabetically OR by time, then dir
+  for(curr_sort in c("alphabetical","by Dir")){
+    
+    cat("###### ", paste0(curr_sort," {.tabset}"),"\n")
+    cat("\n")
+    
+    name_to_use <- paste0(fig_name,"_MW_",comp)
+    curr_animals <- unique(curr_phen_long$Animal_ID[which(curr_phen_long$Compartment == comp)])
+    ### df_for_plot is the long df 
+    ### Treatment_virus as group to test across, gets added in the MWfxn
+    ### NOTE tmp should already be trimmed to the compartment such that 3 groups are the only variable to test across (for each timepoint)
+    
+    
+    df_for_plot <- curr_phen_long[which(curr_phen_long$Compartment == comp &
+                                          curr_phen_long$variable %in% curr_vars_for_plot),
+                                  c("variable","Animal_ID","TimePoint","Treatment_virus","Batch","amount")] %>%
+      dplyr::arrange(TimePoint,variable) %>%
+      #### remove timepoints with all NA
+      dplyr::filter(!TimePoint %in% c("week03","week07","week10","week16")) %>%
+      dplyr::mutate(var_time = factor(paste0(variable,"xx__",TimePoint), rev(unique(paste0(variable,"xx__",TimePoint)))),
+                    group = factor(Treatment_virus, c("Triple_depletion__HTLV-1A_WT","Triple_depletion__HTLV-1ACoI-L"))) %>%
+      ### sort by group to get animal IDs correct
+      dplyr::arrange(group,Batch,Animal_ID) %>%
+      dplyr::mutate(Animal_ID = factor(Animal_ID, unique(Animal_ID)),
+                    Batch = NULL)
+    
+    ### collect means for each var_time/group
+    df_means <- df_for_plot %>%
+      group_by(var_time,group) %>%
+      dplyr::summarise(mean = mean(amount, na.rm=TRUE))
+    
+    ### get direction
+    df_dir <- df_means %>%
+      tidyr::pivot_wider(names_from = "group", values_from = "mean") %>%
+      dplyr::mutate(delta = `Triple_depletion__HTLV-1ACoI-L` - `Triple_depletion__HTLV-1A_WT`,
+                    MW_pvalue = factor(ifelse(`Triple_depletion__HTLV-1ACoI-L` > `Triple_depletion__HTLV-1A_WT`, "ACoI-L > A_WT","ACoI-L < A_WT"),
+                                       c("ACoI-L < A_WT","ACoI-L > A_WT")))
+    
+    ### get var_time order
+    ####### for alphabetical
+    if(curr_sort == "alphabetical"){
+      
+      Assay_order <- df_dir %>%
+        dplyr::mutate(variable = factor(str_before_first(as.character(var_time),"xx__"),curr_vars_for_plot),
+                      TimePoint = str_after_first(as.character(var_time),"xx__")) %>%
+        dplyr::arrange(rev(TimePoint), rev(variable))
+      
+      ############ for by dir
+    }else{
+      
+      
+      Assay_order <- df_dir %>%
+        ## add in p value
+        dplyr::left_join(df_for_plot %>%  
+                           group_by(var_time) %>%
+                           rstatix::wilcox_test(amount ~ group) %>%
+                           dplyr::select(c(p,var_time)),
+                         by = "var_time") %>%
+        dplyr::mutate(TimePoint = str_after_first(as.character(var_time),"xx__"),
+                      sig = factor(ifelse(p < 0.05, "sig", "not"),c("not","sig"))) %>%
+        dplyr::arrange(rev(TimePoint),sig,MW_pvalue, delta)
+      
+      
+    }
+    
+    #### get stats
+    df_stats1 <- df_for_plot %>%
+      dplyr::mutate(var_time = factor(var_time, as.character(Assay_order$var_time))) %>%
+      group_by(var_time) %>%
+      rstatix::wilcox_test(amount ~ group) %>%
+      ### replace with stats calculated separately (they are identical)
+      dplyr::select(-p) %>%
+      dplyr::left_join(list_of_stats[[paste0(name_to_use,"_",levels_or_FC)]] %>%
+                         dplyr::rename(var_time=variable_time) %>%
+                         dplyr::select(c(var_time,TriMutvsTriWT_p_raw)) %>%
+                         dplyr::rename(p=TriMutvsTriWT_p_raw),
+                       by = c("var_time")) %>%
+      add_significance("p") %>%
+      dplyr::filter(group1 == "Triple_depletion__HTLV-1A_WT" & group2 == "Triple_depletion__HTLV-1ACoI-L") %>%
+      add_xy_position(x = "var_time", dodge = 0) %>%
+      ## add dir color
+      dplyr::left_join(df_dir[,c("var_time","MW_pvalue")], by ="var_time")
+    
+    df_stats <- df_stats1 %>%
+      ### modify y position & get vertically centered asterisk
+      dplyr::mutate(y.position = y.pos_to_use,
+                    p.signif = ifelse(p.signif == "ns","","\U2217"))
+    
+    
+    ######### plot
+    ### design plot with assay on x and value on y for stats to work
+    p <- ggplot(df_for_plot %>%
+                  dplyr::mutate(var_time = factor(var_time, as.character(Assay_order$var_time))) %>%
+                  dplyr::arrange(var_time), 
+                aes(x = var_time, y = amount))+
+      ### add points
+      geom_beeswarm(aes(x = var_time, y = amount, fill = group, color = group, shape = Animal_ID, 
+                     group =group ### needs to be added to geom_point
+                     ), alpha = 0.8, 
+                    #position = position_jitterdodge(dodge.width = 0.5, jitter.height = 0, jitter.width = 0),
+                    size = 3, stroke = 1,
+                    dodge.width = 0.7, corral = "wrap", corral.width = 0.2)+
+      # ### add means
+      # geom_beeswarm(data = df_means %>%
+      #             dplyr::mutate(var_time = factor(var_time, as.character(levels(df_for_plot$var_time)))), aes(x=var_time, y=mean, color = group), shape = 4, stroke = 1, dodge.width = 0.5)+
+      
+      scale_fill_manual(values = c("palegreen","seagreen4"))+
+      scale_shape_manual(values = shape_values_to_use)+
+      scale_color_manual(values = c("Triple_depletion__HTLV-1A_WT"="palegreen",
+                                    "Triple_depletion__HTLV-1ACoI-L"="seagreen4",
+                                    "ACoI-L > A_WT"="seagreen4",
+                                    "ACoI-L < A_WT"="palegreen"),
+                         ### only add the stars in the legend
+                         breaks = c("ACoI-L > A_WT","ACoI-L < A_WT"))+ 
+      ### add lines between the variables instead of on them
+      geom_vline(xintercept=seq(1.5, length(unique(df_for_plot$var_time))-0.5, 1), 
+                 lwd=0.3, colour="grey")+
+      ### addlines between timepoint blocks
+      geom_vline(xintercept=seq(length(unique(df_for_plot$variable))+.5,
+                                length(unique(df_for_plot$variable))*(length(unique(df_for_plot$TimePoint)))-0.5,
+                                length(unique(df_for_plot$variable))), 
+                 lwd=0.4, colour="grey20")+
+      ### add unlabeled space for p-values
+      scale_y_continuous(limits = limits_to_use, breaks = breaks_to_use, labels = labels_to_use)+
+      ### add pvalue annotation
+      stat_pvalue_manual(data=df_stats,
+                         label = "p.signif", size = 6, color = "MW_pvalue",
+                         ### remove bracket and hide non-sig
+                         remove.bracket = TRUE, #hide.ns = TRUE,
+                         family="Arial Unicode MS",
+                         vjust = 0.45, ### to get vertically aligned with Assay label
+                         coord.flip = TRUE)+
+      ### then flip
+      coord_flip()+
+      theme_bw()+
+      guides(
+        ### asterisk legend
+        color=guide_legend(title = "MW p < 0.05",
+                           override.aes=list(label=c("\U2217","\U2217"))),
+        ### group legend
+        fill= guide_legend(override.aes = list(color=c("palegreen","seagreen4"))),
+        shape = guide_legend(override.aes=list(fill=c(
+          rep("palegreen",length(unique(curr_phen_long$Animal_ID[which(curr_phen_long$Group == "Triple_depletion__WT")]))),
+          rep("seagreen4",length(unique(curr_phen_long$Animal_ID[which(curr_phen_long$Group == "Triple_depletion__m1AC")])))),
+          color=c(
+          rep("palegreen",length(unique(curr_phen_long$Animal_ID[which(curr_phen_long$Group == "Triple_depletion__WT")]))),
+          rep("seagreen4",length(unique(curr_phen_long$Animal_ID[which(curr_phen_long$Group == "Triple_depletion__m1AC")]))))
+          )
+          ))+
+      theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+    
+    
+    
+    
+    
+    plot(p)
+    
+    cat("\n")
+    cat(' \n \n') ### this is the key!
+    
+  }
+  cat("\n")
+  cat(' \n \n') ### this is the key!
+}
+cat("\n")
+cat(' \n \n') ### this is the key!
+
+```
+
+
+#### Scatterplots with box {.tabset}
+
+```{r scatBox_setup}
+#### set order for only those that are sig diff
+curr_vars_for_plot_df <- list_of_stats[[paste0(fig_name,"_MW_Blood_",levels_or_FC)]] %>%
+    dplyr::mutate(var_time_comp = paste0(variable_time,"__Blood")) %>%
+  ### add BAL
+  rbind(list_of_stats[[paste0(fig_name,"_MW_BAL_",levels_or_FC)]] %>%
+          dplyr::mutate(var_time_comp = paste0(variable_time,"__BAL")) %>%
+          dplyr::select(!!!rlang::syms(colnames(.)))) %>%
+  ### filter to only sig by Chi vs WT
+  dplyr::filter(grepl("p < 0.05", TriMutvsTriWT_dir))
+
+curr_vtp_for_plot <- sort(unique(curr_vars_for_plot_df$var_time_comp)) #### includes time & compartment
+
+
+```
+
+
+```{r setBAL}
+#### compartments separate so can have different dimensions
+comp <- "BAL"
+```
+
+``` {r levels_ScatterplotWithBox, results = 'asis', fig.height = 14, fig.width = 8}
+ 
+    name_to_use <- paste0(fig_name,"_MW_",comp)
+    curr_animals <- unique(curr_phen_long$Animal_ID[which(curr_phen_long$Compartment == comp)])
+    ### df_for_plot is the long df 
+    ### Treatment_virus as group to test across, gets added in the MWfxn
+    ### NOTE tmp should already be trimmed to the compartment such that 3 groups are the only variable to test across (for each timepoint)
+    
+    curr_vars_for_plot_noComp <- curr_vtp_for_plot[grepl(comp,curr_vtp_for_plot)] %>%
+      str_before_last("__")
+    
+     
+    df_for_plot <- curr_phen_long %>%
+      dplyr::mutate(var_time = paste0(variable,"xx__",TimePoint)) %>%
+      dplyr::filter(Compartment == comp & var_time %in% curr_vars_for_plot_noComp) %>%
+      dplyr::select(variable,Animal_ID,TimePoint,Treatment_virus,Batch,amount) %>%
+      dplyr::arrange(desc(TimePoint),variable) %>%
+      dplyr::mutate(var_time = factor(paste0(variable,", \n",TimePoint), rev(unique(paste0(variable,", \n",TimePoint)))),
+                    group = factor(Treatment_virus, c("Triple_depletion__HTLV-1A_WT","Triple_depletion__HTLV-1ACoI-L"))) %>%
+      ### sort by group to get animal IDs correct
+      dplyr::arrange(group,Batch,Animal_ID) %>%
+      dplyr::mutate(Animal_ID = factor(Animal_ID, unique(Animal_ID)),
+                    Batch = NULL)
+    
+ 
+  
+    
+     cat("##### ", paste0(comp," free y {.tabset}"),"\n")
+  cat("\n")
+  
+
+    ######### plot
+    ### design plot with assay on x and value on y for stats to work
+    p <- ggplot(df_for_plot, aes(x = group, y = amount))+
+            geom_boxplot(aes(x = group, y = amount,fill = group), color = "grey40",alpha = 0.5, outliers = FALSE)+
+      ### add points
+      geom_beeswarm(aes(x = group, y = amount, fill = group, color = group, shape = Animal_ID#, 
+                    # group =group ### needs to be added to geom_point
+                     ), alpha = 0.9, 
+                    #position = position_jitterdodge(dodge.width = 0.5, jitter.height = 0, jitter.width = 0),
+                    size = 3, stroke = 1, 
+                    dodge.width = 0.7, corral = "wrap", corral.width = 0.2)+
+
+
+      
+      scale_fill_manual(values = c("palegreen","seagreen4"))+
+      scale_shape_manual(values = shape_values_to_use)+
+      scale_color_manual(values = c("Triple_depletion__HTLV-1A_WT"="palegreen2",
+                                    "Triple_depletion__HTLV-1ACoI-L"="seagreen4",
+                                    "ACoI-L > A_WT"="seagreen4",
+                                    "ACoI-L < A_WT"="palegreen2"))+ 
+      facet_wrap(. ~ var_time, scales = "free_y", ncol = 5) +
+      scale_y_continuous(expand = expansion(mult = c(0.05, 0.1)))+ ### adds cushion for p values to not be cutoff
+           stat_compare_means(aes(group =group), comparisons = list(c("Triple_depletion__HTLV-1A_WT","Triple_depletion__HTLV-1ACoI-L")), label = "p.format", method = "wilcox.test", paired = FALSE, label.x = 1.25, tip.length = 0.01)+
+
+      ylab("ng/mL")+
+
+      theme_bw()+
+      guides(
+        ### asterisk legend
+        #color=guide_legend(title = "MW p < 0.05",
+         #                  override.aes=list(label=c("\U2217","\U2217"))),
+        ### group legend
+        fill= guide_legend(override.aes = list(color=c("palegreen2","seagreen4"))),
+        shape = guide_legend(override.aes=list(fill=c(
+          rep("palegreen2",length(unique(curr_phen_long$Animal_ID[which(curr_phen_long$Group == "Triple_depletion__WT")]))),
+          rep("seagreen4",length(unique(curr_phen_long$Animal_ID[which(curr_phen_long$Group == "Triple_depletion__m1AC")])))),
+          color=c(
+          rep("palegreen2",length(unique(curr_phen_long$Animal_ID[which(curr_phen_long$Group == "Triple_depletion__WT")]))),
+          rep("seagreen4",length(unique(curr_phen_long$Animal_ID[which(curr_phen_long$Group == "Triple_depletion__m1AC")]))))
+          )
+          ))+
+      theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+            axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+    
+    
+    
+    
+    
+    plot(p)
+    
+    cat("\n")
+    cat(' \n \n') ### this is the key!
+    
+
+       cat("##### ", paste0(comp," same y {.tabset}"),"\n")
+  cat("\n")
+  
+
+    ######### plot
+    ### design plot with assay on x and value on y for stats to work
+    p <- ggplot(df_for_plot, aes(x = group, y = amount))+
+            geom_boxplot(aes(x = group, y = amount,fill = group), color = "grey40",alpha = 0.5, outliers = FALSE)+
+      ### add points
+      geom_beeswarm(aes(x = group, y = amount, fill = group, color = group, shape = Animal_ID#, 
+                    # group =group ### needs to be added to geom_point
+                     ), alpha = 0.9, 
+                    #position = position_jitterdodge(dodge.width = 0.5, jitter.height = 0, jitter.width = 0),
+                    size = 3, stroke = 1, 
+                    dodge.width = 0.7, corral = "wrap", corral.width = 0.2)+
+
+
+      
+      scale_fill_manual(values = c("palegreen","seagreen4"))+
+      scale_shape_manual(values = shape_values_to_use)+
+      scale_color_manual(values = c("Triple_depletion__HTLV-1A_WT"="palegreen2",
+                                    "Triple_depletion__HTLV-1ACoI-L"="seagreen4",
+                                    "ACoI-L > A_WT"="seagreen4",
+                                    "ACoI-L < A_WT"="palegreen2"))+ 
+      facet_wrap(. ~ var_time, scales = "fixed", ncol = 5) +
+      scale_y_continuous(expand = expansion(mult = c(0.05, 0.1)))+ ### adds cushion for p values to not be cutoff
+           stat_compare_means(aes(group =group), comparisons = list(c("Triple_depletion__HTLV-1A_WT","Triple_depletion__HTLV-1ACoI-L")), label = "p.format", method = "wilcox.test", paired = FALSE, label.x = 1.25, tip.length = 0.01)+
+
+      ylab("ng/mL")+
+
+      theme_bw()+
+      guides(
+        ### asterisk legend
+        #color=guide_legend(title = "MW p < 0.05",
+         #                  override.aes=list(label=c("\U2217","\U2217"))),
+        ### group legend
+        fill= guide_legend(override.aes = list(color=c("palegreen2","seagreen4"))),
+        shape = guide_legend(override.aes=list(fill=c(
+          rep("palegreen2",length(unique(curr_phen_long$Animal_ID[which(curr_phen_long$Group == "Triple_depletion__WT")]))),
+          rep("seagreen4",length(unique(curr_phen_long$Animal_ID[which(curr_phen_long$Group == "Triple_depletion__m1AC")])))),
+          color=c(
+          rep("palegreen2",length(unique(curr_phen_long$Animal_ID[which(curr_phen_long$Group == "Triple_depletion__WT")]))),
+          rep("seagreen4",length(unique(curr_phen_long$Animal_ID[which(curr_phen_long$Group == "Triple_depletion__m1AC")]))))
+          )
+          ))+
+      theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+            axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+    
+    
+    
+    
+    
+    plot(p)
+    
+    cat("\n")
+    cat(' \n \n') ### this is the key!
+    
+
+
+```
+
+```{r setBlood}
+#### compartments separate so can have different dimensions
+comp <- "Blood"
+```
+
+``` {r levels_ScatterplotWithBox___Blood, ref.label=c('levels_ScatterplotWithBox'), results = 'asis', fig.height = 11, fig.width = 8}
+```
+
+### Fig 3b Monocytes heatmap {.tabset}
+
+``` {r setVars___Monocytes}
+fig_name <- paste0("Fig3b_",shortName_for_wtBatch)
+vars_to_use <- monocyte_columns
+var_name <- "monocytes"
+treatment_to_use <- "Triple_depletion"
+
+
+row_font_size <- 6
+row_font_size_trimmed <- 6
+levels_or_FC <- "levels"
+```
+
+
+```{r MW_3Group_levels_calculate___Monocytes, ref.label=c('MW_3Group_levels_calculate'), results='asis', fig.height=12, fig.width=7}
+```
+
+
+``` {r CellSubsets_levels_heatmap___Monocytes, ref.label=c('CellSubsets_levels_heatmap'), results = 'asis', fig.height = 10, fig.width = 8}
+```
+
+#### Scatterplots  {.tabset}
+
+```{r scat_setup_bulkPops___Monocytes}
+mac_vars <- unique(curr_phen_long$variable)[grepl("Macrophages",unique(curr_phen_long$variable))]
+nonmac_vars <- setdiff(unique(curr_phen_long$variable),mac_vars)
+curr_vars_for_plot <- c("Pct_Monocytes","Pct_Classical","Pct_Intermediate","Pct_Nonclassical",
+                        sort(nonmac_vars[grepl("_TNFa",nonmac_vars)]),
+                        sort(nonmac_vars[grepl("_IL8",nonmac_vars)]),
+                        sort(nonmac_vars[grepl("_IL10",nonmac_vars)]),
+                        mac_vars)
+limits_to_use <- c(-10,100)
+breaks_to_use <- c(0,25,50,75,100)
+labels_to_use <- c(0,25,50,75,100)
+y.pos_to_use <- limits_to_use[1]
+```
+
+
+``` {r CellSubsets_levels_Scatterplot___Monocytes, ref.label=c('CellSubsets_levels_Scatterplot'), results = 'asis', fig.height = 30, fig.width = 7}
+```
+
+
+
+#### Scatterplots with box {.tabset}
+
+```{r scatBox_setup___Mono, ref.label=c('scatBox_setup')}
+```
+
+
+```{r setBAL___Mono, ref.label=c('setBAL')}
+```
+
+``` {r levels_ScatterplotWithBox___BAL___Mono, ref.label=c('levels_ScatterplotWithBox'), results = 'asis', fig.height = 20, fig.width = 8}
+```
+
+```{r setBlood___Mono, ref.label=c('setBlood')}
+```
+
+``` {r levels_ScatterplotWithBox___Blood___Mono, ref.label=c('levels_ScatterplotWithBox'), results = 'asis', fig.height = 20, fig.width = 8}
+```
+
+
+### Fig 3c Neutrophils heatmap {.tabset}
+
+``` {r setVars___Neutrophils}
+fig_name <- paste0("Fig3c_",shortName_for_wtBatch)
+vars_to_use <- neutrophil_columns
+var_name <- "neutrophils"
+treatment_to_use <- "Triple_depletion"
+
+
+row_font_size <- 7
+row_font_size_trimmed <- 7
+levels_or_FC <- "levels"
+```
+
+
+```{r MW_3Group_levels_calculate___Neutrophils, ref.label=c('MW_3Group_levels_calculate'), results='asis', fig.height=12, fig.width=7}
+```
+
+
+``` {r CellSubsets_levels_heatmap___Neutrophils, ref.label=c('CellSubsets_levels_heatmap'), results = 'asis', fig.height = 10, fig.width = 8}
+```
+
+#### Scatterplots  {.tabset}
+
+```{r scat_setup_bulkPops___Neutrophils}
+
+curr_vars_for_plot_prep <- c("Pct_Neutrophil",
+                        sort(unique(curr_phen_long$variable)[grepl("_TNFa",unique(curr_phen_long$variable))]),
+                        sort(unique(curr_phen_long$variable)[grepl("_IL8",unique(curr_phen_long$variable))]),
+                        sort(unique(curr_phen_long$variable)[grepl("_IL10",unique(curr_phen_long$variable))]))
+curr_vars_for_plot_prep2 <- setdiff(unique(curr_phen_long$variable),curr_vars_for_plot_prep)
+curr_vars_for_plot <- c(curr_vars_for_plot_prep, curr_vars_for_plot_prep2)
+
+limits_to_use <- c(-10,100)
+breaks_to_use <- c(0,25,50,75,100)
+labels_to_use <- c(0,25,50,75,100)
+y.pos_to_use <- limits_to_use[1]
+
+```
+
+
+``` {r CellSubsets_levels_Scatterplot___Neutrophils, ref.label=c('CellSubsets_levels_Scatterplot'), results = 'asis', fig.height = 13, fig.width = 7}
+```
+
+
+
+#### Scatterplots with box {.tabset}
+
+```{r scatBox_setup___Neut, ref.label=c('scatBox_setup')}
+```
+
+
+```{r setBAL___Neut, ref.label=c('setBAL')}
+```
+
+``` {r levels_ScatterplotWithBox___BAL___Neut, ref.label=c('levels_ScatterplotWithBox'), results = 'asis', fig.height = 8, fig.width = 8}
+```
+
+```{r setBlood___Neut, ref.label=c('setBlood')}
+```
+
+``` {r levels_ScatterplotWithBox___Blood___Neut, ref.label=c('levels_ScatterplotWithBox'), results = 'asis', fig.height = 11, fig.width = 8}
+```
+
+
+
+```{r addSuppFigS6andFigS7}
+list_of_plotted[[paste0("SFigS6_",shortName_for_wtBatch)]] <- paste0("see Fig3a, Fig3b, Fig3c tabs for ",shortName_for_wtBatch)
+list_of_plotted[[paste0("SFigS7_",shortName_for_wtBatch)]] <- paste0("see Fig3a, Fig3b, Fig3c tabs for ",shortName_for_wtBatch)
+
+list_of_stats[[paste0("SFigS6_",shortName_for_wtBatch)]] <- paste0("see Fig3a, Fig3b, Fig3c tabs for ",shortName_for_wtBatch)
+list_of_stats[[paste0("SFigS7_",shortName_for_wtBatch)]] <- paste0("see Fig3a, Fig3b, Fig3c tabs for ",shortName_for_wtBatch)
+
+```
+
+
+
+
+```{r prep_Cytokines_WTbatch1a2combo, ref.label=c('prep_CellSubsets_WTbatch1a2combo')}
+```
+
+
+## Cytokine/chemokine Differences between groups (Fig 4, Supp Fig 8, Supp Fig 9)  {.tabset}
+
+
+### Fig 4abc Cytokines heatmaps {.tabset}
+
+``` {r setVars___cytokines}
+fig_name <- paste0("Fig4abc_",shortName_for_wtBatch)
+vars_to_use <- cytokine_columns
+var_name <- "cytokines"
+treatment_to_use <- "Triple_depletion"
+
+
+row_font_size <- 3
+row_font_size_trimmed <- 6
+levels_or_FC <- "levels"
+```
+
+
+```{r MW_3Group_levels_calculate___cytokines, ref.label=c('MW_3Group_levels_calculate'), results='asis', fig.height=12, fig.width=7}
+```
+
+
+``` {r CellSubsets_levels_heatmap___cytokines, ref.label=c('CellSubsets_levels_heatmap'), results = 'asis', fig.height = 9, fig.width = 8}
+```
+
+
+#### Scatterplots with box (Supp Fig 8) {.tabset}
+
+```{r scatBox_setup___cytokines, ref.label=c('scatBox_setup')}
+```
+
+
+```{r setBAL___cytokines, ref.label=c('setBAL')}
+```
+
+``` {r levels_ScatterplotWithBox___BAL___cytokines, ref.label=c('levels_ScatterplotWithBox'), results = 'asis', fig.height = 8, fig.width = 8}
+```
+
+```{r setBlood___cytokines, ref.label=c('setBlood')}
+```
+
+``` {r levels_ScatterplotWithBox___Blood___cytokines, ref.label=c('levels_ScatterplotWithBox'), results = 'asis', fig.height = 5, fig.width = 8}
+```
+
+
+```{r addSuppFigS8}
+list_of_plotted[[paste0("SFigS8_",shortName_for_wtBatch)]] <- paste0("see Fig4abc tabs for ",shortName_for_wtBatch)
+
+list_of_stats[[paste0("SFigS8_",shortName_for_wtBatch)]] <- paste0("see Fig4abc tabs for ",shortName_for_wtBatch)
+```
+
+
+
+### Cytokines: vs No Depletion (Supp Fig 9) {.tabset}
+
+```{r setVars_Cytokines_vsNoDep}
+fig_name <- paste0("SFig9_cytvNoD_",shortName_for_wtBatch)
+vars_to_use <- cytokine_columns
+var_name <- "cytokines"
+treatment_to_use <- c("No_depletion","Triple_depletion")
+
+row_font_size <- 7
+row_font_size_trimmed <- 7
+levels_or_FC <- "levels"
+
+
+######### trim to both WT batch1/2 only
+phen_long_to_use <- phen_long %>%
+   # dplyr::filter(Treatment == "Triple_depletion") %>%
+  dplyr::filter(Virus == "HTLV-1ACoI-L" & Batch %in% c("batch1","batch2") |
+                  Virus == "HTLV-1A_WT" & Batch %in% c("batch1","batch2"))
+name_for_wtBatch <- "WT batch 1 & 2 combined"
+shortName_for_wtBatch <- "" ## no name needed since WT1a2 for all analyses
+
+virus_order_to_use <- c("HTLV-1ACoI-L","HTLV-1A_WT")
+dir_names_order <- c("TriMutvsNoMut_dir","TriWTvsNoMut_dir","TriMutvsTriWT_dir")
+
+curr_treat_virus_factor_levels <- c("No_depletion__HTLV-1ACoI-L","Triple_depletion__HTLV-1ACoI-L","Triple_depletion__HTLV-1A_WT")
+```
+
+
+```{r MW_3Group_levels_calculate___Cytokines_vsNoDep, ref.label=c('MW_3Group_levels_calculate'), results='asis', fig.height=12, fig.width=7}
+```
+
+
+``` {r CellSubsets_levels_heatmap___Cytokines_vsNoDep, ref.label=c('CellSubsets_levels_heatmap'), results = 'asis', fig.height = 10, fig.width = 8}
+```
+
+
+
+
+```{r prep_CytokinesVsCellPops_WTbatch1a2combo, ref.label=c('prep_CellSubsets_WTbatch1a2combo')}
+```
+
+
+## Associations between sig different cytokines & cell subsets (Fig 4de)  {.tabset}
+
+Animals in correlations: `r paste(unique(phen_long_to_use$Animal_ID))`
+
+```{r setGroupsList_and_VsName___2}
+cor_method <- "spearman"
+method_to_use <- cor_method
+#phen_long_to_use <- phen_long
+#### which groups to include samples from, NO COMPARTMENT
+group_list <- list("TripleOnly"=c("Triple_depletion__HTLV-1A_WT",
+                                 "Triple_depletion__HTLV-1ACoI-L"))
+
+
+
+
+contrast_name <- paste0("Fig4de_",shortName_for_wtBatch)
+
+### which variable sets to compare
+### first one is "xxx vs"
+vars_to_use1 <- c(DC_columns,monocyte_columns,neutrophil_columns)
+var_name1 <- "CellSubsets"
+levels_or_BOTH1 <- "levels" ### if want to use levels or BOTH levels AND FC for varset1
+compartment_var1 <- "BAL"
+
+### second one is the "vs XX" dataset
+var_name2 <- "ChiVsWT_Cytokines_inBAL"
+levels_or_BOTH2 <- "levels" ### if want to use levels or BOTH levels AND FC for varset1
+compartment_var2 <- "BAL"
+
+#### get sig diff cytokines
+sig_diff_cytokines <- list_of_stats[[paste0("Fig4abc_",shortName_for_wtBatch,"_MW_",compartment_var2,"_",levels_or_BOTH2)]] %>%
+  dplyr::filter(TriMutvsTriWT_p_raw < 0.05)
+vars_to_use2 <- sig_diff_cytokines$variable_time
+#vars_to_use2 <- unique(str_before_first(sig_diff_cytokines$variable_time,"xx__"))
+
+
+
+### which compartment, for naming purposes
+comp_to_use <- "BAL"
+
+### which contrast name(s) - should have one per element of group_list
+contrast_name_to_use <- c("TriMutvsTriWT")
+
+
+```
+
+
+calculate comparisons between `r paste0(var_name1," in ",compartment_var1," vs ",var_name2)` : `r paste(vars_to_use2, collapse = ', ')`
+
+
+```{r corr_perTimepoint_vsOther_function, include=FALSE, eval=TRUE}
+
+corr_perTimepoint_vsOther_fxn <- function(group_name,
+                                          compartment_var1,compartment_var2,
+                                          vars_to_keep1,var_name1,
+                                          vars_to_keep2,var_name2, levels_or_BOTH1, levels_or_BOTH2){
+  
+  
+  groups_of_interest1 <- paste0(group_list[[i]],"__",compartment_var1)
+  groups_of_interest2 <- paste0(group_list[[i]],"__",compartment_var2)
+
+  ###### wide with amount for both datasets
+  ### var set 1
+  amount_each_wide1 <- phen_long_to_use[,c("Animal_ID","TimePoint","Treatment_virus_compartment","variable","amount")] %>%
+    #### filter to only 2 var datasets
+    dplyr::filter(variable %in% c(vars_to_keep1)) %>%
+    ### make wider
+    pivot_wider(names_from = "variable", values_from = "amount") %>%
+    ### add unique rowname
+    mutate(Specimen_tp=paste0("m",Animal_ID,"_",TimePoint)) %>%
+    ### trim to groups of interest for var1
+    dplyr::filter(Treatment_virus_compartment %in% groups_of_interest1) %>%
+    column_to_rownames("Specimen_tp") 
+
+  ### var set 2
+  amount_each_wide2 <- phen_long_to_use[,c("Animal_ID","TimePoint","Treatment_virus_compartment","variable","amount")] %>%
+    ### add var_time
+    dplyr::mutate(var_time = paste0(variable,"xx__",TimePoint)) %>%
+    #### filter to only 2 var datasets
+    dplyr::filter(var_time %in% c(vars_to_keep2)) %>%
+    ### remove var_time
+    dplyr::select(-var_time) %>%
+    ### make wider
+    pivot_wider(names_from = "variable", values_from = "amount") %>%
+    ### add unique rowname
+    mutate(Specimen_tp=paste0("m",Animal_ID,"_",TimePoint)) %>%
+    ### trim to groups of interest for var1
+    dplyr::filter(Treatment_virus_compartment %in% groups_of_interest2) %>%
+    column_to_rownames("Specimen_tp") 
+
+    ### generate amount_each_wide
+  amount_each_wide <- dplyr::full_join(
+    amount_each_wide1[,setdiff(colnames(amount_each_wide1),unique(str_before_first(vars_to_keep2,"xx__")))] %>%
+      rownames_to_column(),
+    amount_each_wide2[,unique(str_before_first(vars_to_keep2,"xx__"))] %>%
+      rownames_to_column(), by = "rowname") %>%
+    column_to_rownames() 
+
+  
+
+  ### wide with FC for vars that can have FC
+  ### for varset1
+  if(levels_or_BOTH1 == "BOTH"){
+  fc_each_wide1 <- phen_long_to_use[,c("Animal_ID","TimePoint","Treatment_virus_compartment","variable","FC")] %>%
+    #### filter to only 2 var datasets
+    dplyr::filter(variable %in% c(vars_to_keep1)) %>%
+    ### add "FC" to all variable names
+    #dplyr::mutate(variable = paste0(variable,"_FC")) %>%
+    ### make wider
+    pivot_wider(names_from = "variable", values_from = "FC") %>%
+    ### remove rows for tp = week00 since these are all 100%
+    filter(TimePoint != "week00") %>%
+    ### add unique rowname
+    mutate(Specimen_tp=paste0("m",Animal_ID,"_",TimePoint)) %>%
+    ### trim to groups of interest for var1
+    dplyr::filter(Treatment_virus_compartment %in% groups_of_interest1) %>%
+    column_to_rownames("Specimen_tp") 
+  }else{
+    ### if not, use amounts
+    fc_each_wide1 <- amount_each_wide
+  }
+  
+  ### for varset2
+    if(levels_or_BOTH2 == "BOTH"){
+  fc_each_wide2 <- phen_long_to_use[,c("Animal_ID","TimePoint","Treatment_virus_compartment","variable","FC")] %>%
+    ### add var_time
+    dplyr::mutate(var_time = paste0(variable,"xx__",TimePoint)) %>%
+    #### filter to only 2 var datasets
+    dplyr::filter(grepl(paste(c(vars_to_keep2), collapse = '|'),var_time)) %>%
+    ### remove var_time
+    dplyr::select(-var_time) %>%
+    ### add "FC" to all variable names
+    #dplyr::mutate(variable = paste0(variable,"_FC")) %>%
+    ### make wider
+    pivot_wider(names_from = "variable", values_from = "FC") %>%
+    ### remove rows for tp = week00 since these are all 100%
+    filter(TimePoint != "week00") %>%
+    ### add unique rowname
+    mutate(Specimen_tp=paste0("m",Animal_ID,"_",TimePoint)) %>%
+    ### trim to groups of interest for var1
+    dplyr::filter(Treatment_virus_compartment %in% groups_of_interest1) %>%
+    column_to_rownames("Specimen_tp") 
+  }else{
+    ### if not use amounts
+    fc_each_wide2 <- amount_each_wide
+  }
+  
+  ### generate fc_each_wide
+   fc_each_wide <- dplyr::full_join(
+    fc_each_wide1[,setdiff(colnames(fc_each_wide1),unique(str_before_first(vars_to_keep2,"xx__")))] %>%
+      rownames_to_column(),
+    fc_each_wide2[,unique(str_before_first(vars_to_keep2,"xx__"))] %>%
+      rownames_to_column(), by = "rowname") %>%
+    column_to_rownames() 
+
+  
+  
+  ###  each already trimmed to groups_of_interest, and put in list
+  #### if both varsets are levels only then only nned to generate levels correlations
+  if(levels_or_BOTH1 == "levels" & levels_or_BOTH2 == "levels"){
+    list_of_trimmed_dfs <- list("levels"=amount_each_wide)
+  }else{
+      list_of_trimmed_dfs <- list("levels"=amount_each_wide,
+                              "FC"=fc_each_wide)
+  }
+  
+  #### perform corr for amount and FC separately
+  for(curr_ds in names(list_of_trimmed_dfs)){
+    curr_trimmed <- list_of_trimmed_dfs[[curr_ds]]
+    
+    ### prep combo df
+    cor_mat_combo <- data.frame("rowname"=vars_to_keep1)
+    cor_test_mat_combo <- data.frame("rowname"=vars_to_keep1)
+    
+    ### prep df to store number of animals for each corrplot
+    num_animals_df <- data.frame(matrix(ncol=2))
+    colnames(num_animals_df) <- c("timepoint","Num_animals")
+    
+    
+    
+    ##### for each timepoint present for both vars_to_keep1 and vars_to_keep2
+    timepoints1 <- curr_trimmed[,vars_to_keep1] %>%
+      filter(if_any(everything(), ~ !is.na(.))) %>%
+      rownames_to_column() %>%
+      dplyr::mutate(TimePoint = str_after_last(rowname,"_")) 
+    timepoints2 <- curr_trimmed[,unique(str_before_first(vars_to_keep2,"xx__"))] %>%
+      filter(if_any(everything(), ~ !is.na(.))) %>%
+      rownames_to_column() %>%
+      dplyr::mutate(TimePoint = str_after_last(rowname,"_")) 
+    timepoints_with_both <- unique(intersect(timepoints1$TimePoint,timepoints2$TimePoint))
+    
+    for (tp in timepoints_with_both){
+      curr_df <- curr_trimmed[which(curr_trimmed$TimePoint == tp),] %>%
+        #### remove columns if are all NA or if there is only one non-NA
+        select_if(~sum(!is.na(.)) > 1)
+      
+      
+      ## generate cor matrix (var1 in rows, var2 in columns) - doesn't take long
+      cor_mat <- cor(as.matrix(curr_df[,vars_to_keep1]), 
+                     as.matrix(
+                       curr_df %>%
+                         dplyr::select(
+                           !!!rlang::syms(
+                             intersect(
+                               colnames(curr_df),
+                               unique(str_before_first(vars_to_keep2,"xx__"))
+                               )
+                             )
+                           )
+                       ),
+        method = cor_method, use="pa") 
+      
+      ## raw p 
+      cor_test_mat <- data.frame(matrix(NA, nrow=length(vars_to_keep1), ncol=length(intersect(colnames(curr_df),unique(str_before_first(vars_to_keep2,"xx__"))))))
+      rownames(cor_test_mat) <- vars_to_keep1
+      colnames(cor_test_mat) <- intersect(colnames(curr_df),unique(str_before_first(vars_to_keep2,"xx__")))
+      
+      for(curr_assay1 in vars_to_keep1) {
+        for(curr_assay2 in intersect(colnames(curr_df),unique(str_before_first(vars_to_keep2,"xx__")))) {
+          cor_test_mat[curr_assay1,curr_assay2] <- 
+            cor.test(as.matrix(curr_df[,vars_to_keep1])[,curr_assay1], 
+                     as.matrix(
+                       curr_df %>%
+                         dplyr::select(
+                           !!!rlang::syms(
+                             intersect(
+                               colnames(curr_df),
+                               unique(str_before_first(vars_to_keep2,"xx__"))
+                               )
+                             )
+                           )
+                       )[,curr_assay2], 
+                     method = cor_method, use="pa")$p.value
+          
+        }
+      }
+      ## adj p for multiple comparisons by BH over assays
+      cor_test_adj_mat <- cor_test_mat #duplicate dataframe to replace values
+      for(curr_assay in vars_to_keep1) {
+        cor_test_adj_mat[curr_assay,] <- p.adjust(cor_test_mat[curr_assay,], method = "BH")
+      }
+      
+      
+      
+
+      ### save correlation matrix, raw pvalues, adjusted pvalues
+      list_of_corr <- list("corr_coef" = cor_mat, "p_raw" = cor_test_mat, "p_adj" = cor_test_adj_mat)
+      openxlsx::write.xlsx(list_of_corr, file = file.path(outputTABLES_dir,
+                                                          paste0(params$study_name,"_Corr",var_name1,"Vs",var_name2,"_",shortName_for_wtBatch,"_",tp,"_",group_name,"_",curr_ds,"_",method_to_use,"_CoefPvals.xlsx")),
+                           rowNames=T)
+
+      ### also save as rdata to be able to access quickly
+      save(cor_mat, cor_test_mat, cor_test_adj_mat, file = file.path(outputRData_dir,
+                                                                     paste0(params$study_name,"_Corr",var_name1,"Vs",var_name2,"_",shortName_for_wtBatch,"_",tp,"_",group_name,"_",curr_ds,"_",method_to_use,"_CoefPvals.RData")))
+
+
+      
+      ###### combine timepoints
+      cor_mat_df <- data.frame(cor_mat) %>%
+        rownames_to_column() %>%
+        `colnames<-`(c("rowname",paste0(tp,"_",colnames(cor_mat))))
+      
+      cor_mat_combo <- dplyr::left_join(cor_mat_combo, cor_mat_df, by = "rowname")
+      
+      
+      cor_test_mat_df <- data.frame(cor_test_mat) %>%
+        rownames_to_column() %>%
+        `colnames<-`(c("rowname",paste0(tp,"_",colnames(cor_test_mat))))
+      
+      cor_test_mat_combo <- dplyr::left_join(cor_test_mat_combo, cor_test_mat_df, by = "rowname")
+      
+      
+      ####### also add to num_animals_df
+      num_animals_df <- rbind(num_animals_df, data.frame("timepoint"=tp,"Num_animals"=dim(curr_df)[1]))
+      
+      
+      
+    }
+    
+    cat("\n")
+    cat(' \n \n') ### this is the key!   
+    
+    ### save combinedcorrelation matrix, raw pvalues, adjusted pvalues
+    ### if not available will save the empty matrices
+    list_of_corr <- list("corr_coef" = cor_mat_combo, "p_raw" = cor_test_mat_combo, "num_animals"=num_animals_df)
+    openxlsx::write.xlsx(list_of_corr, file = file.path(outputTABLES_dir, 
+                                                        paste0(params$study_name,"_Corr",var_name1,"Vs",var_name2,"_",shortName_for_wtBatch,"_comboTP_",group_name,"_",curr_ds,"_",method_to_use,"_CoefPvals.xlsx")),
+                         rowNames=T)
+    
+    ### also save as rdata to be able to access quickly
+    save(cor_mat_combo, cor_test_mat_combo, num_animals_df, file = file.path(outputRData_dir, 
+                                                                             paste0(params$study_name,"_Corr_",var_name1,"Vs",var_name2,"_",shortName_for_wtBatch,"_comboTP_",group_name,"_",curr_ds,"_",method_to_use,"_CoefPvals.RData")))
+    
+    saveRDS(timepoints_with_both, file = file.path(outputRData_dir, 
+                                                                             paste0(params$study_name,"_Corr_",var_name1,"Vs",var_name2,"_",shortName_for_wtBatch,"_numTPsBoth_",group_name,"_",curr_ds,"_",method_to_use,"_CoefPvals.rds")))
+    
+  }
+  
+  cat("\n")
+  cat(' \n \n') ### this is the key!
+  
+  
+  
+  
+}
+
+cat("\n")
+cat(' \n \n') ### this is the key!
+
+
+
+```
+
+
+
+``` {r corrCalcs_vsOther_PRETRIM, eval = eval_corr_calcs}
+#eval_corr_calcs
+
+for(i in 1:length(group_list)){
+  
+  group_of_interest <- paste0(group_list[[i]],"__",paste(unique(c(compartment_var1,compartment_var2)), collapse = ''))
+  group_name <-  paste0(names(group_list)[i],"__",paste(unique(c(compartment_var1,compartment_var2)), collapse = ''))
+  
+ 
+  vars_to_keep1 <- vars_to_use1
+  vars_to_keep2 <- vars_to_use2 ### in var_time format
+
+  
+  cat(" ",paste0(" "),"\n")
+  cat("\n")
+  
+  corr_perTimepoint_vsOther_fxn(group_name,
+                                compartment_var1,compartment_var2,
+                                          vars_to_keep1,var_name1,
+                                          vars_to_keep2,var_name2, levels_or_BOTH1, levels_or_BOTH2)
+  
+  cat("\n")
+  cat(' \n \n') ### this is the key!
+  
+
+}
+cat("\n")
+cat(' \n \n') ### this is the key!
+
+
+
+
+```
+
+
+
+
+```{r setGroupsList_and_VsName___3}
+#phen_long_to_use <- phen_long
+#### which groups to include samples from, NO COMPARTMENT
+group_list <- list("TripleOnly"=c("Triple_depletion__HTLV-1A_WT",
+                                 "Triple_depletion__HTLV-1ACoI-L"))
+
+
+
+
+### which variable sets to compare
+### first one is "xxx vs"
+vars_to_use1 <- c(DC_columns,monocyte_columns,neutrophil_columns)
+var_name1 <- "CellSubsets"
+levels_or_BOTH1 <- "levels" ### if want to use levels or BOTH levels AND FC for varset1
+compartment_var1 <- "Blood"
+
+### second one is the "vs XX" dataset
+var_name2 <- "ChiVsWT_Cytokines_inBAL"
+levels_or_BOTH2 <- "levels" ### if want to use levels or BOTH levels AND FC for varset1
+compartment_var2 <- "BAL"
+#### get sig diff cytokines
+sig_diff_cytokines <- list_of_stats[[paste0("Fig4abc_",shortName_for_wtBatch,"_MW_",compartment_var2,"_",levels_or_BOTH2)]] %>%
+  dplyr::filter(TriMutvsTriWT_p_raw < 0.05)
+vars_to_use2 <- sig_diff_cytokines$variable_time
+#vars_to_use2 <- unique(str_before_first(sig_diff_cytokines$variable_time,"xx__"))
+
+
+
+
+### which compartment, for naming purposes
+comp_to_use <- "Blood"
+
+### which contrast name(s) - should have one per element of group_list
+contrast_name_to_use <- c("TriMutvsTriWT")
+
+
+```
+
+
+calculate comparisons between `r paste0(var_name1," in ",compartment_var1," vs ",var_name2)` : `r paste(vars_to_use2, collapse = ', ')`
+
+
+``` {r corrCalcs_vsOther_PRETRIM___3, ref.label=c('corrCalcs_vsOther_PRETRIM'), eval = eval_corr_calcs}
+#eval_corr_calcs
+```
+
+
+
+
+```{r setGroupsList_and_VsName___4}
+#phen_long_to_use <- phen_long
+#### which groups to include samples from, NO COMPARTMENT
+group_list <- list("TripleOnly"=c("Triple_depletion__HTLV-1A_WT",
+                                 "Triple_depletion__HTLV-1ACoI-L"))
+
+
+
+
+### which variable sets to compare
+### first one is "xxx vs"
+vars_to_use1 <- c(DC_columns,monocyte_columns,neutrophil_columns)
+var_name1 <- "CellSubsets"
+levels_or_BOTH1 <- "levels" ### if want to use levels or BOTH levels AND FC for varset1
+compartment_var1 <- "Blood"
+
+### second one is the "vs XX" dataset
+var_name2 <- "ChiVsWT_Cytokines_inBlood"
+levels_or_BOTH2 <- "levels" ### if want to use levels or BOTH levels AND FC for varset1
+compartment_var2 <- "Blood"
+#### get sig diff cytokines
+sig_diff_cytokines <- list_of_stats[[paste0("Fig4abc_",shortName_for_wtBatch,"_MW_",compartment_var2,"_",levels_or_BOTH2)]] %>%
+  dplyr::filter(TriMutvsTriWT_p_raw < 0.05)
+vars_to_use2 <- sig_diff_cytokines$variable_time
+#vars_to_use2 <- unique(str_before_first(sig_diff_cytokines$variable_time,"xx__"))
+
+
+
+
+### which compartment, for naming purposes
+comp_to_use <- "Blood"
+
+### which contrast name(s) - should have one per element of group_list
+contrast_name_to_use <- c("TriMutvsTriWT")
+
+
+```
+
+
+calculate comparisons between `r paste0(var_name1," in ",compartment_var1," vs ",var_name2)` : `r paste(vars_to_use2, collapse = ', ')`
+
+``` {r corrCalcs_vsOther_PRETRIM___4, ref.label=c('corrCalcs_vsOther_PRETRIM'), eval = eval_corr_calcs}
+#eval_corr_calcs
+```
+
+
+```{r setGroupsList_and_VsName___5}
+#phen_long_to_use <- phen_long
+#### which groups to include samples from, NO COMPARTMENT
+group_list <- list("TripleOnly"=c("Triple_depletion__HTLV-1A_WT",
+                                 "Triple_depletion__HTLV-1ACoI-L"))
+
+
+
+
+### which variable sets to compare
+### first one is "xxx vs"
+vars_to_use1 <- c(DC_columns,monocyte_columns,neutrophil_columns)
+var_name1 <- "CellSubsets"
+levels_or_BOTH1 <- "levels" ### if want to use levels or BOTH levels AND FC for varset1
+compartment_var1 <- "BAL"
+
+### second one is the "vs XX" dataset
+var_name2 <- "ChiVsWT_Cytokines_inBlood"
+levels_or_BOTH2 <- "levels" ### if want to use levels or BOTH levels AND FC for varset1
+compartment_var2 <- "Blood"
+
+#### get sig diff cytokines
+sig_diff_cytokines <- list_of_stats[[paste0("Fig4abc_",shortName_for_wtBatch,"_MW_",compartment_var2,"_",levels_or_BOTH2)]] %>%
+  dplyr::filter(TriMutvsTriWT_p_raw < 0.05)
+vars_to_use2 <- sig_diff_cytokines$variable_time
+#vars_to_use2 <- unique(str_before_first(sig_diff_cytokines$variable_time,"xx__"))
+
+
+
+### which compartment, for naming purposes
+comp_to_use <- "Blood"
+
+### which contrast name(s) - should have one per element of group_list
+contrast_name_to_use <- c("TriMutvsTriWT")
+
+
+```
+
+
+calculate comparisons between `r paste0(var_name1," in ",compartment_var1," vs ",var_name2)` : `r paste(vars_to_use2, collapse = ', ')`
+
+``` {r corrCalcs_vsOther_PRETRIM___5, ref.label=c('corrCalcs_vsOther_PRETRIM'), eval = eval_corr_calcs}
+#eval_corr_calcs
+```
+
+
+```{r set_p_cut_pt001}
+set_p_cut_corr <- 0.001
+```
+
+### `r paste0(set_p_cut_corr)` {.tabset}
+
+compile associations with p < `r paste0(set_p_cut_corr)`
+
+```{r collectCorrForEachTimepoint, results='asis'}
+# group_list <- list("TripleOnly"=c("Triple_depletion__HTLV-1A_WT",
+#                                  "Triple_depletion__HTLV-1ACoI-L"))
+
+### which variable sets to compare
+### first one is "xxx vs"
+var_name1 <- "CellSubsets"
+
+
+### which contrast name(s) - should have one per element of group_list
+contrast_name_to_use <- c("TriMutvsTriWT")
+
+### prep master dataframe
+master_df <- data.frame(matrix(ncol=5,nrow=0))
+colnames(master_df) <- c("cell_pop","cytokine","spearman_R","spearman_p","timepoint")
+
+for(i in 1:length(group_list)){
+  
+  ### for each combo of compartments
+  compartments_df <- data.frame(
+    "comp_cellpops"=c("BAL","Blood","Blood","BAL"),
+    "comp_cytokines"=c("BAL","BAL","Blood","Blood")
+  )
+  for(comp_row in 1:nrow(compartments_df)){
+    
+    compartment_var1 <- compartments_df$comp_cellpops[comp_row]
+    compartment_var2 <- compartments_df$comp_cytokines[comp_row]
+    
+    ##### format is var_time
+    sig_diff_cytokines <- list_of_stats[[paste0("Fig4abc_",shortName_for_wtBatch,"_MW_",compartment_var2,"_",levels_or_BOTH2)]] %>%
+  dplyr::filter(TriMutvsTriWT_p_raw < 0.05)
+    
+    
+  var_name2 <- paste0("ChiVsWT_Cytokines_in",compartment_var2)
+                                
+  
+  group_of_interest <- paste0(group_list[[i]],"__",paste(unique(c(compartment_var1,compartment_var2)), collapse = ''))
+  group_name <-  paste0(names(group_list)[i],"__",paste(unique(c(compartment_var1,compartment_var2)), collapse = ''))
+
+  curr_ds <- "levels"
+
+    #### load which timepoints have
+    timepoints_with_both <- readRDS(file = file.path(outputRData_dir, 
+                                                     paste0(params$study_name,"_Corr_",var_name1,"Vs",var_name2,"_",shortName_for_wtBatch,"_numTPsBoth_",group_name,"_",curr_ds,"_",method_to_use,"_CoefPvals.rds")))
+    
+    
+    
+    ### for each tp separately
+    for(tp in timepoints_with_both){
+      
+      
+      Corr_Name <- paste0(params$study_name,"_Corr",var_name1,"Vs",var_name2,"_",shortName_for_wtBatch,"_",tp,"_",group_name,"_",curr_ds)
+      Corr_Name_combo <- paste0(params$study_name,"_Corr_",var_name1,"Vs",var_name2,"_",shortName_for_wtBatch,"_comboTP_",group_name,"_",curr_ds)
+      
+      groups_of_interest1 <- paste0(group_list[[i]],"__",compartment_var1)
+  groups_of_interest2 <- paste0(group_list[[i]],"__",compartment_var2)
+
+   
+  #### load num_animals_df (with combo mats)
+  load(file = file.path(outputRData_dir, paste0(Corr_Name_combo,"_",method_to_use,"_CoefPvals.RData")))
+
+  ### load corr mat (cor_mat, cor_test_mat)
+  load(file = file.path(outputRData_dir, paste0(Corr_Name,"_",method_to_use,"_CoefPvals.RData")))
+
+  
+ 
+  
+  curr_cor_df <- data.frame(cor_mat) %>%
+    rownames_to_column("cell_pop") %>%
+    tidyr::pivot_longer(!cell_pop, names_to = "cytokine", values_to = "spearman_R") %>%
+    ### add in p values
+    dplyr::left_join(data.frame(cor_test_mat) %>%
+                       rownames_to_column("cell_pop") %>%
+                       tidyr::pivot_longer(!cell_pop, names_to = "cytokine", values_to = "spearman_p"),
+                     by = c("cell_pop","cytokine")) %>%
+    ### add compartments & timepoint
+     dplyr::mutate(cell_pop = paste0(cell_pop,"__",compartment_var1),
+                  cytokine = paste0(cytokine,"__",compartment_var2),
+                  timepoint = paste0(tp))
+  
+
+  
+  ### add to master
+  master_df <- rbind(master_df,curr_cor_df[,colnames(master_df)])
+    
+ 
+      
+    }
+    
+   
+    
+    
+  }
+  
+  
+
+}
+
+### save trimmed to p < 0.05 for  stats
+list_of_stats[[paste0(contrast_name)]] <- master_df
+### print trimmed to p < 0.001 for figure
+
+  to_print <- master_df %>%
+    ### trim to set_p_cut_corr
+    dplyr::filter(spearman_p < as.double(set_p_cut_corr)) %>%
+    dplyr::arrange(timepoint,cell_pop,cytokine) %>%
+    dplyr::mutate(cell_pop = str_replace_all(cell_pop,"Neutrophiles","Neutrophils")) %>%
+    DT::datatable(extensions = 'Buttons',
+                  options = list(dom = 'Blfrtip',
+                                 buttons = c('copy', 'csv', 'excel', 'pdf', 'print'),
+                                 iDisplayLength = 50,
+                                 lengthMenu = list(c(10,25,50,-1),
+                                                   c(10,25,50,"All"))))
+
+  print(htmltools::tagList(to_print))
+
+
+```
+
+```{r set_p_cut_pt01}
+set_p_cut_corr <- 0.01
+```
+
+### `r paste0(set_p_cut_corr)` {.tabset}
+
+compile associations with p < `r paste0(set_p_cut_corr)`
+
+```{r collectCorrForEachTimepoint_p01, results='asis'}
+
+### print trimmed to p < 0.001 for figure
+
+  to_print <- master_df %>%
+    ### trim to set_p_cut_corr
+    dplyr::filter(spearman_p < as.double(set_p_cut_corr)) %>%
+    dplyr::arrange(timepoint,cell_pop,cytokine) %>%
+    dplyr::mutate(cell_pop = str_replace_all(cell_pop,"Neutrophiles","Neutrophils")) %>%
+    DT::datatable(extensions = 'Buttons',
+                  options = list(dom = 'Blfrtip',
+                                 buttons = c('copy', 'csv', 'excel', 'pdf', 'print'),
+                                 iDisplayLength = 50,
+                                 lengthMenu = list(c(10,25,50,-1),
+                                                   c(10,25,50,"All"))))
+
+  print(htmltools::tagList(to_print))
+
+```
+
+
+
+
+
+
+
+
+## Virus in lung (Figure 6) {.tabset}
+
+```{r virusInLung_prep}
+vlung_df_to_use <- list_of_datasets[["Virus_Lung_variables"]]
+name_to_use <- "including TiT"
+short_name_to_use <- "wTiT"
+```
+
+### `r paste0(name_to_use)` {.tabset}
+
+```{r virusInLung, results='asis', fig.height=9, fig.width=8}
+virus_factor_levels <- c("HTLV-1ACoI-L","HTLV-1A_WT")
+
+
+vlung_df_long_prep <- vlung_df_to_use %>%
+  ### convert Fibrosis to 0-1 scale like others
+  dplyr::mutate(Fibrosis = ifelse(Fibrosis == "negative",0,
+                                  ### combine mild/moderate since only one annotation of moderate
+                                  ifelse(grepl("fibrosis",Fibrosis),1,NA)),
+                Bronchiectasis = as.numeric(Bronchiectasis)) %>%
+  ### make longer
+  tidyr::pivot_longer(cols = !c(Animal_ID,Lung_Lobes), names_to = "variable", values_to = "value") 
+
+  ### number of positive lobes per assay 
+lobes_per_assay <- vlung_df_long_prep %>%
+    dplyr::group_by(Animal_ID,variable) %>%
+  dplyr::mutate(value = sum(value)) %>%
+  ungroup() %>%
+  ## add back Lung_Lobes
+  dplyr::mutate(Lung_Lobes = paste("Num_Pos_Lobes")) %>%
+  unique(.)
+
+#### number of positive assays per lobe
+assays_per_lobe <- vlung_df_long_prep %>%
+    dplyr::group_by(Animal_ID,Lung_Lobes) %>%
+  dplyr::mutate(value = sum(value)) %>%
+  ungroup() %>%
+  ## add back variable
+  dplyr::mutate(variable = paste("Num_Pos_Vars")) %>%
+  unique(.)
+
+### add to vlung_df_long_prep
+
+vlung_df_long <- vlung_df_long_prep %>%
+  rbind(lobes_per_assay[,colnames(.)]) %>%
+  rbind(assays_per_lobe[,colnames(.)]) 
+
+
+
+############ MW for each variable/lobe
+
+  ## full_df only has the variables in columns and the factorized group (plus any other covariates if they are in the model)
+full_df <- vlung_df_long %>%
+  dplyr::mutate(lobe_var = paste0(Lung_Lobes, "__", variable)) %>%
+  ### remove single labels
+  dplyr::select(-Lung_Lobes,-variable) %>%
+  ### make wider
+  tidyr::pivot_wider(names_from = "lobe_var", values_from = "value") %>%
+  ## add virus only group
+  dplyr::left_join(unique(list_of_datasets[["Virus_variables"]][,c("Animal_ID","Virus")]), by = "Animal_ID") %>%
+  column_to_rownames("Animal_ID") %>%
+    ### factorize group
+    dplyr::mutate(Group_f = factor(Virus, virus_factor_levels),
+                  Virus = NULL)
+  
+  
+   
+ 
+      ## generate matrix with only variables for stats 
+      Assay_mat <- as.matrix(full_df[,setdiff(colnames(full_df),"Group_f")])
+      
+       curr_p_raw <- apply(Assay_mat, 2, function(x) wilcox.test(x ~ Group_f, data = full_df)$p.value)
+     
+      ###### first define function
+        hl <- function(x, y = NULL) {
+          if (is.null(y)) {
+            walsh <- outer(x, x, "+") / 2
+            median(walsh[lower.tri(walsh, diag = TRUE)], na.rm = TRUE)
+          } else {
+            median(outer(x, y, "-"), na.rm = TRUE)
+          }
+        }
+        
+        #### then generate the vector
+        curr_est <- c()
+        for(i in colnames(Assay_mat)){
+          x <- full_df[which(full_df$Group_f == virus_factor_levels[1]),i]
+          y <- full_df[which(full_df$Group_f == virus_factor_levels[2]),i]
+          ce <- hl(x, y)
+          names(ce) <- i
+          curr_est <- c(curr_est,ce)
+        }
+        
+        
+        #### combine to df
+        
+        curr_p_df <- data.frame(curr_p_raw, curr_est) %>%
+          ### add dir
+          dplyr::mutate(ChiVsWT_dir = ifelse(curr_p_raw < 0.05, 
+                                             ifelse(curr_est > 0,
+                                                    "up, p < 0.05",
+                                                    "down, p < 0.05"),
+                                             ifelse(curr_p_raw < 0.1 & curr_p_raw >= 0.05,
+                                                    ifelse(curr_est > 0,
+                                                           "up, p < 0.1",
+                                                           "down, p < 0.1"),
+                                                    "not_sig")),
+                        ChiVsWT_dir = factor(ChiVsWT_dir,
+                                             c("up, p < 0.05","up, p < 0.1","not_sig",
+                                             "down, p < 0.1","down, p < 0.05"))
+                                             ) %>%
+          rownames_to_column() 
+        colnames(curr_p_df) <- c("rowname",
+                                 
+                                 paste0("ChiVsWT_p_raw"),
+                                 paste0("ChiVsWT_est"),
+                                 paste0("ChiVsWT_dir"))
+        
+###### save stats
+        list_of_stats[[paste0("MW_Lung",short_name_to_use)]] <- curr_p_df
+
+#### collect data to plot
+df_for_plot <- vlung_df_long %>%
+  ## combine lobe & var
+  dplyr::mutate(lobe_var = paste0(Lung_Lobes,"__",variable)) %>%
+  ## trim to only animal var value
+  dplyr::select(Animal_ID, lobe_var, value) %>%
+  ## make wider with animals in columns
+  tidyr::pivot_wider(names_from = "Animal_ID", values_from = "value") %>%
+  column_to_rownames("lobe_var")
+
+#### collect col annotation
+annotation_col <-  list_of_datasets[["Virus_variables"]] %>%
+  dplyr::select(Animal_ID,Treatment,Virus,Batch) %>%
+  unique(.) %>%
+  ## trim to only the Animals with lung data
+  dplyr::filter(Animal_ID %in% colnames(df_for_plot)) %>%
+  dplyr::arrange(Treatment,Virus,Batch,Animal_ID) %>%
+  column_to_rownames("Animal_ID")
+
+### row annotation
+annotation_row <- data.frame("rowname"=rownames(df_for_plot)) %>%
+  dplyr::mutate(variable = str_after_last(rowname,"__"),
+                variable = factor(variable, unique(variable)),
+                Lung_Lobe = str_before_last(rowname,"__"),
+                Lung_Lobe = factor(Lung_Lobe,unique(Lung_Lobe))
+                ) %>%
+  ### add in dir
+  dplyr::left_join(curr_p_df %>% dplyr::select(-ChiVsWT_est,-ChiVsWT_p_raw), by = "rowname") %>%
+  column_to_rownames()
+
+annotation_colors <-   list(Treatment=c(No_depletion="turquoise2", Triple_depletion="magenta2"),
+                            Virus=c("HTLV-1ACoI-L"="seagreen4","HTLV-1A_WT"="palegreen"),
+                           Batch=c(batch1="lemonchiffon1",batch2="lemonchiffon3"),
+                         variable=c(DNA_gag="darkgoldenrod3",
+                                    RNA_gag="darkgoldenrod1",
+                                    DNA_orfI_II="darkorange3",
+                                    RNA_rex_orf_I="darkorange",
+                                    RNA_Tax="plum1",
+                                    RNA_usHBZ="peachpuff1",
+                                    RNA_sHBZ="lightgoldenrod1",
+                                    Bronchiectasis="aquamarine1",
+                                    Fibrosis="lightskyblue",
+                                    Num_Pos_Vars="mediumpurple1"),
+                         Lung_Lobe=c(`Right Cranial`="darkred",
+                                `Right Middle`="darkorange4",
+                                `Right Caudal`="darkgoldenrod4",
+                                Accessory="olivedrab4",
+                                `Left Cranial Cranial part`="darkslategrey",
+                                `Left Cranial Caudal part`="royalblue4",
+                                `Left Caudal`="slateblue4",
+                                Num_Pos_Lobes = "purple4"),
+                         ChiVsWT_dir=c("up, p < 0.05"="red2","up, p < 0.1"="lightpink",not_sig="white",
+                                             "down, p < 0.1"="skyblue","down, p < 0.05"="blue2"))
+  
+
+
+## gaps for columns
+gaps_df_columns_prep <- annotation_col %>%
+  ## add treat_vir
+  dplyr::mutate(treat_vir = paste0(Treatment,"_",Virus),
+                treat_vir = factor(treat_vir,unique(treat_vir)))
+
+gaps_df_columns <- data.frame(table(gaps_df_columns_prep$treat_vir)) %>%
+    mutate(cumsum = cumsum(Freq))
+
+
+### different orders of rows
+hm_orders_to_use <- list(
+  "by Lobe, Assay"=c("Lung_Lobe","variable"),
+  "by Assay, Lobe"=c("variable","Lung_Lobe")
+)
+
+for(hmo in names(hm_orders_to_use)){
+ 
+     cat("#### ",paste0(hmo," "),"\n")
+     cat("\n")
+
+### arrange rows by order to use
+  curr_ann_row <- dplyr::arrange(annotation_row,  annotation_row[,hm_orders_to_use[[hmo]]])
+
+## gaps for rows
+
+  gaps_df <- data.frame(table(curr_ann_row[,hm_orders_to_use[[hmo]][1]])) %>%
+    mutate(cumsum = cumsum(Freq))  
+
+     mycols = c("grey80","black","dodgerblue2","darkcyan","green3","chartreuse1",
+               "yellow1","goldenrod1","orangered1","deeppink2")
+
+  #mycols = rev(colorRampPalette(brewer.pal(n=11, name = "RdYlBu"))(1000))
+  range = 1
+  breakscale <- c(-1,seq(0,8),9)
+
+  hc <-
+    pheatmap(df_for_plot[rownames(curr_ann_row),rownames(annotation_col)],
+             #scale="row", 
+             na_col = "white",
+             cluster_cols=FALSE, 
+             cluster_rows = FALSE,
+             fontsize_row = 7,
+             gaps_col = unique(gaps_df_columns$cumsum),
+             gaps_row = unique(gaps_df$cumsum),
+             col=mycols, breaks=breakscale, 
+             clustering_method="ward.D2",
+             annotation_col = annotation_col, 
+             annotation_row = curr_ann_row,
+             annotation_colors = annotation_colors)
+  
+
+  
+ cat("\n")
+  cat(' \n \n') ### this is the key!
+}
+ cat("\n")
+  cat(' \n \n') ### this is the key!
+
+    list_of_plotted[[paste0("hm_Lung",short_name_to_use)]] <- df_for_plot
+
+  
+
+```
+
+
+```{r virusInLung_prep___noTiT}
+vlung_df_to_use <- list_of_datasets[["Virus_Lung_variables"]] %>%
+  dplyr::filter(Animal_ID != "TiT") ### since this was no depletion
+name_to_use <- "excluding TiT"
+short_name_to_use <- "noTiT"
+```
+
+### `r paste0(name_to_use)` {.tabset}
+
+```{r virusInLung___noTiT, ref.label=c('virusInLung'), results='asis', fig.height=9, fig.width=8}
+```
+
+
+## Olink in vitro (Supp Fig 13c) {.tabset}
+
+### Heatmaps {.tabset}
+
+```{r olink_invitro, results='asis'}
+name_to_use <- "SuppFig13c"
+levels_or_FC <- "LEVELS"
+###### generate df to compare: rows = samples, columns = assays
+full_df <- list_of_datasets[["Olink_invitro"]] %>%
+  ### add group
+  dplyr::mutate(Group_f = factor(ifelse(grepl("12_",PIVOT_NAME),"p12","p16C"),c("p16C","p12"))) %>%
+  column_to_rownames("PIVOT_NAME")
+
+   
+  
+  p_value_df1 <- data.frame("rowname"=colnames(full_df)) %>%
+    dplyr::filter(rowname != "Group_f")
+  
+  
+       ## wilcoxon for pairwise differences
+      
+      ## generate matrix with only variables for stats 
+      Assay_mat <- as.matrix(full_df[,p_value_df1$rowname])
+      
+          curr_p_raw <- apply(Assay_mat, 2, function(x) wilcox.test(x ~ Group_f, data = full_df)$p.value)
+        curr_p_adj <- p.adjust(curr_p_raw, method = 'BH') 
+        ##### since have zeros, can't use the wilcox function
+        # curr_est <- apply(Assay_mat, 2, function(x) wilcox.test(x[Group_f %in% c(
+        #   groups_to_compare$group1[g], groups_to_compare$group2[g])] ~ Group_f[Group_f %in% c(
+        #     groups_to_compare$group1[g], groups_to_compare$group2[g])], data = full_df, conf.int = TRUE)$estimate)
+        #### https://aakinshin.net/posts/r-hodges-lehmann-problems/
+        
+        ###### first define function
+        hl <- function(x, y = NULL) {
+          if (is.null(y)) {
+            walsh <- outer(x, x, "+") / 2
+            median(walsh[lower.tri(walsh, diag = TRUE)], na.rm = TRUE)
+          } else {
+            median(outer(x, y, "-"), na.rm = TRUE)
+          }
+        }
+        
+        #### then generate the vector
+        curr_est <- c()
+        for(i in colnames(Assay_mat)){
+          x <- full_df[which(full_df$Group_f == levels(full_df$Group_f)[1]),i]
+          y <- full_df[which(full_df$Group_f == levels(full_df$Group_f)[2]),i]
+          ce <- hl(x, y)
+          names(ce) <- i
+          curr_est <- c(curr_est,ce)
+        }
+        
+        
+        #### combine to df
+        
+        curr_p_df <- data.frame(curr_p_raw, curr_p_adj, curr_est) %>%
+          rownames_to_column() 
+        colnames(curr_p_df) <- c("rowname",
+                                 
+                                 "p_raw",
+                                 "p_adj",
+                                 "est")
+        
+    
+  
+  
+  
+    
+    ## format p values
+ p_value_df1 <- curr_p_df %>%
+    column_to_rownames() %>%
+    ## set sig figs
+    mutate_all(signif, 2) %>%
+   rownames_to_column()%>%
+      dplyr::mutate(dir = ifelse(p_raw < 0.05, ifelse(est > 0, "up, p < 0.05","down, p < 0.05"),
+                                      ifelse(p_raw < 0.1, ifelse(est > 0, "up, p < 0.1","down, p < 0.1"),
+                                             ifelse(p_raw>0.05,"not_sig","no_test"))))  %>%
+   column_to_rownames()
+  
+  
+  ### save pvalues
+ 
+ list_of_stats[[paste0(name_to_use,"_",levels_or_FC)]] <- p_value_df1 
+ 
+################## heatmap
+ 
+  ### tmp is the *inverted* wide df with each variable being tested in rows and columns = animal_ID
+  ### Treatment_virus as group to test across, gets added in the MWfxn
+  ### NOTE tmp should already be trimmed to the compartment such that 3 groups are the only variable to test across (for each timepoint)
+  tmp <- full_df %>%
+    ## make longer to transpose
+    rownames_to_column() %>%
+    tidyr::pivot_longer(!c(rowname,Group_f), names_to = "variable", values_to = "value") %>%
+    ## make wider with animals as columns
+    dplyr::select(-Group_f) %>%
+    tidyr::pivot_wider(names_from = "rowname", values_from = "value") %>%
+    column_to_rownames("variable")
+  
+  
+########### prep for heatmap:
+#### columns = samples, rows = assay/timepoint
+ p_value_df1 <- list_of_stats[[paste0(name_to_use,"_",levels_or_FC)]] 
+  sig_assay_df <- p_value_df1 %>%
+    rownames_to_column() %>%
+    ### add factored dir
+    dplyr::mutate_at(vars(ends_with("dir")), factor, c("up, p < 0.05","up, p < 0.1","not_sig","down, p < 0.1","down, p < 0.05"))
+  
+#  dir_names_order <- paste0("TriMutvsTriWT_dir")
+  
+  ##### annotation for rows, first listed will be closest to the heatmap (right side of ann cols), last will be on the left edge of the plot
+  annotation_row = sig_assay_df[,c("dir","rowname")] %>%
+    dplyr::mutate(Assay=rowname) %>%
+    column_to_rownames()
+  
+  
+  ###### annotation for columns
+  annotation_col <- full_df %>%
+    ### select only Group_f
+    dplyr::select(Group_f) 
+  
+  #### set orders to use
+
+  
+   hm_orders_to_use <- list(
+    "by Assay, dir"=c("Assay","dir"),
+    "by dir, Assay"=c("dir","Assay")
+  )
+  
+  
+  
+  
+  ######## set colors, breakscale
+  mycols = colorRampPalette(c("blue4","white","red4"))(1000)
+  #mycols = rev(colorRampPalette(brewer.pal(n=11, name = "RdYlBu"))(1000))
+  range = 2
+  breakscale <- c(-1*range,seq(-.9*range,.9*range, length.out=length(mycols)-1),1*range)
+  
+  
+  
+  #### set annotation_colors
+  
+  annotation_colors=list(Group_f=c("p16C"="seagreen4","p12"="palegreen"),
+                         dir=c("up, p < 0.05"="red2","up, p < 0.1"="lightpink",not_sig="grey90",
+                                             "down, p < 0.1"="skyblue","down, p < 0.05"="blue2"))
+  
+           
+  
+  cat("#### ", paste0("untrimmed "),"\n")
+  cat("\n")
+  
+  
+ hmo <- "by Assay, dir"
+    
+    cat(" ", paste0("ROWSCALED 
+"),"\n")
+    cat("\n")
+    
+    ### arrange rows by order to use
+    curr_ann_row1 <- dplyr::arrange(annotation_row,  annotation_row[,hm_orders_to_use[[hmo]]]) 
+    
+    tmp2 <- tmp[intersect(rownames(curr_ann_row1),rownames(tmp)),intersect(rownames(annotation_col),colnames(tmp))] %>%
+      ### remove columns with all NA
+      dplyr::select(where(function(.) any(!is.na(.))))
+    
+    
+    ### set the gaps for the rows from first element of orders, except if assay
+    if(hm_orders_to_use[[hmo]][1] != "Assay"){
+      gaps_df <- data.frame(table(curr_ann_row1[intersect(rownames(curr_ann_row1),rownames(tmp)),hm_orders_to_use[[hmo]][1]])) %>%
+        mutate(cumsum = cumsum(Freq))
+    }else{
+      gaps_df <- data.frame("cumsum"=c(0))
+    }
+    
+    #### gaps for columns
+    
+    gaps_col_df <- data.frame(table(annotation_col$Group_f)) %>%
+      dplyr::mutate(cumsum = cumsum (Freq))
+
+    
+    ### remove variable so not plotted
+    curr_ann_row <- curr_ann_row1 %>%
+      dplyr::select(-Assay)
+    
+    # 
+    mycols = colorRampPalette(c("blue4","white","red4"))(1000)
+    range = 2
+    breakscale <- c(-1*range,seq(-.9*range,.9*range, length.out=length(mycols)-1),1*range)
+    
+    hc <-
+      pheatmap(tmp2,
+               scale="row", 
+               na_col = "grey70",
+               cluster_cols=FALSE, 
+               cluster_rows = FALSE,
+               fontsize_row = 10,
+               gaps_col = unique(gaps_col_df$cumsum),
+               gaps_row = unique(gaps_df$cumsum),
+               col=mycols, breaks=breakscale, 
+               clustering_method="ward.D2",
+               annotation_col = annotation_col, 
+               annotation_row = curr_ann_row,
+               annotation_colors = annotation_colors)
+    
+    
+    
+    cat("\n")
+    cat(' \n \n') ### this is the key!
+  
+
+ cat("#### ", paste0("trimmed, p < 0.05 {.active}"),"\n")
+  cat("\n")
+  
+  
+  ##### trim row annoation
+  ##### generate list to replace NAs with not_sig
+  replace_list <- list()
+  for(n in colnames(annotation_row)[grepl("vs",colnames(annotation_row))]){
+    replace_list[[paste0(n)]] <- "not_sig"
+  }
+  
+  annotation_row1 <- annotation_row %>%
+    ### fill in not_sig for NA
+    replace_na(replace_list) %>%
+       ### change p < 0.1 to not_sig
+    dplyr::mutate_at(vars(contains("dir")), ~str_replace_all(.,"up, p < 0.1","not_sig")) %>%
+        dplyr::mutate_at(vars(contains("dir")), ~str_replace_all(.,"down, p < 0.1","not_sig")) %>%
+   ### remove if not_sig
+    dplyr::filter(if_any(contains("dir"), ~ . != "not_sig")) %>%
+    ### refactorize dir
+    dplyr::mutate_at(vars(contains("dir")), ~factor(., c("up, p < 0.05","not_sig","down, p < 0.05"))) 
+  
+
+  
+   
+  
+  annotation_colors=list(Group_f=c("p16C"="seagreen4","p12"="palegreen"),
+                         dir=c("up, p < 0.05"="red2",not_sig="white","down, p < 0.05"="blue2"))
+  
+  
+  
+  
+  ######### only if have any sig rows to plot
+hmo <- "by dir, Assay"
+      
+      cat(" ", paste0(" ROWSCALED
+"),"\n")
+      cat("\n")
+      
+      ### arrange rows by order to use
+      curr_ann_row1 <- dplyr::arrange(annotation_row1,  annotation_row1[,hm_orders_to_use[[hmo]]]) 
+      
+      tmp2_trim <- tmp2[rownames(curr_ann_row1),] %>%
+        ### remove columns with all NA
+        dplyr::select(where(function(.) any(!is.na(.))))
+      
+      ### set the gaps for the rows from first element of orders, except if assay
+      if(hm_orders_to_use[[hmo]][1] != "Assay"){
+        gaps_df <- data.frame(table(curr_ann_row1[,hm_orders_to_use[[hmo]][1]])) %>%
+          mutate(cumsum = cumsum(Freq))
+      }else{
+        gaps_df <- data.frame("cumsum"=c(0))
+      }
+      
+      ### remove variable so not plotted
+      # if(length(dir_names_order) == 1){
+      #     curr_ann_row <- curr_ann_row1 %>%
+      #   dplyr::select(-variable) %>%
+      #   ##change back to dir
+      #   dplyr::rename(dir=!!rlang::sym(dir_names_order)) 
+      # 
+      # }else{
+           curr_ann_row <- curr_ann_row1 %>%
+        dplyr::select(-Assay) 
+  
+      #}
+        
+      
+      ### can't plot gaps
+      if(dim(tmp2_trim)[1] > 1){
+        gaps_to_plot<-unique(gaps_df$cumsum)
+      }else{
+        gaps_to_plot<-NULL
+      }
+      
+      
+      hc <-
+        pheatmap(tmp2_trim,
+                 scale="row", 
+                 na_col = "grey70",
+                 cluster_cols=FALSE, 
+                 cluster_rows = FALSE,
+                 fontsize_row = 10,
+                 gaps_col =unique(gaps_col_df$cumsum),
+                 gaps_row = gaps_to_plot,
+                 col=mycols, breaks=breakscale, 
+                 clustering_method="ward.D2",
+                 annotation_col = annotation_col, 
+                 annotation_row = curr_ann_row,
+                 annotation_colors = annotation_colors)
+      
+      
+      
+      cat("\n")
+      cat(' \n \n') ### this is the key!
+      
+      
+           cat("#### ", paste0("Table"),"\n")
+  cat("\n")
+  
+  
+  to_save <- tmp2_trim %>%
+    rownames_to_column() %>%
+    dplyr::mutate(rowname = str_remove_all(rowname,"xx")) %>%
+    column_to_rownames() %>%
+    t() %>%
+    data.frame() %>%
+        mutate_all(signif, 4) %>%
+    rownames_to_column("sample") %>%
+
+    dplyr::left_join(annotation_col %>%
+                       rownames_to_column("sample"),
+                     by = "sample") 
+  
+  
+  list_of_plotted[[paste0(name_to_use)]] <- to_save
+  
+  to_print <- to_save %>%
+    DT::datatable(extensions = 'Buttons',
+                  options = list(dom = 'Blfrtip',
+                                 buttons = c('copy', 'csv', 'excel', 'pdf', 'print'),
+                                 iDisplayLength = 50,
+                                 lengthMenu = list(c(10,25,50,-1),
+                                                   c(10,25,50,"All"))))
+
+  print(htmltools::tagList(to_print))
+
+
+
+      
+
+
+
+
+
+```
+
+### Scatterplots {.tabset}
+
+```{r invitro_olink_scatterplots, results='asis', fig.height=3.5, fig.width=4}
+
+### for each variable
+for(i in sort(setdiff(colnames(full_df),"Group_f"))){
+  
+
+      
+  cat("#### ", paste0(i),"\n")
+  cat("\n")
+  
+  df_for_plot <- full_df %>% ## make longer to transpose
+    rownames_to_column() %>%
+      ##refactor group
+      dplyr::mutate(Group_f = factor(Group_f, c("p12","p16C"))) %>%
+      ## trim to i
+      dplyr::select(rowname,Group_f, !!rlang::sym(i)) %>%
+    tidyr::pivot_longer(!c(rowname,Group_f), names_to = "variable", values_to = "amount")
+  
+  df_means <- df_for_plot %>%
+    group_by(Group_f) %>% 
+        summarise(amount = mean(amount))
+
+
+    ######### plot
+    ### design plot with assay on x and value on y for stats to work
+    p <- ggplot(df_for_plot, 
+                aes(x = Group_f, y = amount))+
+      ### add points
+      geom_beeswarm(aes(x = Group_f, y = amount, fill = Group_f,
+                     group =Group_f ### needs to be added to geom_point
+                     ), alpha = 0.8, color = "black", shape = 21,
+                    #position = position_jitterdodge(dodge.width = 0.5, jitter.height = 0, jitter.width = 0),
+                    size = 3, stroke = 1, cex = 2,
+                    dodge.width = 0.7, corral = "wrap", corral.width = 0.2)+
+      # ### add means
+      # geom_beeswarm(data = df_means %>%
+      #             dplyr::mutate(var_time = factor(var_time, as.character(levels(df_for_plot$var_time)))), aes(x=var_time, y=mean, color = group), shape = 4, stroke = 1, dodge.width = 0.5)+
+
+      
+      scale_fill_manual(values = c("grey80","grey20"))+
+      stat_compare_means(method = "wilcox.test", label = "p.format", label.x = 1.5)+
+      ylab(paste0(i))+
+      
+            geom_point(data = df_for_plot %>% 
+      group_by(Group_f) %>% 
+      summarise(mean_amount = mean(amount)), 
+    # Specify aesthetics
+    mapping = aes(y = mean_amount, x = Group_f), 
+    size = 10, color = 'black', shape = 95) +
+
+
+
+      theme_bw()+
+      theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+    
+    
+    
+    
+    
+    plot(p)
+    
+    cat("\n")
+    cat(' \n \n') ### this is the key!
+}
+
+```
+
+
+## Data Tables {.tabset}
+
+### Compiled raw data
+
+```{r rawdata_print}
+#### add with button
+xfun::embed_file(file.path(input_dir,paste0("ccrvb39_batch1and2_RAW_datasets.xlsx")), text = "Excel spreadsheet of RAW datasets")
+
+```
+
+
+### plotted values
+
+```{r plottedValues_print}
+##save
+openxlsx::write.xlsx(list_of_plotted,file.path(outputTABLES_dir,paste0("list_of_plotted.xlsx")))
+
+#### add with button
+xfun::embed_file(file.path(outputTABLES_dir,paste0("list_of_plotted.xlsx")), text = "Excel spreadsheet of plotted")
+
+```
+
+### Stats 
+
+```{r stats_print}
+##save
+openxlsx::write.xlsx(list_of_stats,file.path(outputTABLES_dir,paste0("list_of_stats.xlsx")))
+
+#### add with button
+xfun::embed_file(file.path(outputTABLES_dir,paste0("list_of_stats.xlsx")), text = "Excel spreadsheet of stats")
+
+```
+
+
+## Session info
+
+```{r sessioninfo}
+sessionInfo()
+```
