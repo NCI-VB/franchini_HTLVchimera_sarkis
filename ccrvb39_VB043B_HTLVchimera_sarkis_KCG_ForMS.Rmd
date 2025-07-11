@@ -28,9 +28,7 @@ params:
  
   ##### should evaluate the corr calcs or are these already done?
   eval_corr_calcs: TRUE
-  ##### should evaluate the eulers or are these already done?
-  eval_euler_plotting: TRUE #trimmed down this function to not take so long
-  
+
   pval_cutoff: "0.05" 
   png_or_pdf: "png" #png or cairo_pdf for weird fonts
   lib_loc_to_use: "/data/goldfarbmurenkc/R/rhel8/4.3/"
@@ -61,7 +59,6 @@ DT::datatable(
      
 
 eval_corr_calcs <- params$eval_corr_calcs                  
-eval_euler_plotting <- params$eval_euler_plotting  
 eval_Fig2 <- params$eval_Fig2
 ```
 
@@ -122,7 +119,7 @@ names(list_of_datasets) <- tab_names
 
 ```{r processData}
 
-##### first format the processed the blood/BAL FACS data for batch 1
+##### first format the processed the (blood only) FACS data for batch 1
 ### for DC tabs
 DC_df <- data.frame()
 for(curr_tab in names(list_of_datasets)[grepl(" DC",names(list_of_datasets))]){
@@ -275,7 +272,7 @@ phen_long <- list_of_datasets[["Virus_variables"]] %>%
                    by = c(meta_vars_short,"variable","amount")) %>%
   
   ### add DC batch2
-   dplyr::full_join(list_of_datasets[["DC_batch2"]] %>%
+   dplyr::full_join(list_of_datasets[["DC_blood_batch2"]] %>%
                      pivot_longer(cols = !c(!!!rlang::syms(meta_vars_short)), names_to = "variable", values_to = "amount"),
                    by = c(meta_vars_short,"variable","amount")) %>%
     ### add monocytes
@@ -286,7 +283,7 @@ phen_long <- list_of_datasets[["Virus_variables"]] %>%
                    by = c(meta_vars_short,"variable","amount")) %>%
   
     ### add monocytes batch2
-   dplyr::full_join(list_of_datasets[["Monocytes_batch2"]] %>%
+   dplyr::full_join(list_of_datasets[["Monocytes_blood_batch2"]] %>%
                      pivot_longer(cols = !c(!!!rlang::syms(meta_vars_short)), names_to = "variable", values_to = "amount"),
                    by = c(meta_vars_short,"variable","amount")) %>%
 
@@ -297,9 +294,16 @@ phen_long <- list_of_datasets[["Virus_variables"]] %>%
                      pivot_longer(cols = !c(!!!rlang::syms(meta_vars_short)), names_to = "variable", values_to = "amount"),
                    by = c(meta_vars_short,"variable","amount")) %>%
       ### add neutrophil batch2
-   dplyr::full_join(list_of_datasets[["Neutrophil_batch2"]] %>%
+   dplyr::full_join(list_of_datasets[["Neutrophil_blood_batch2"]] %>%
                      pivot_longer(cols = !c(!!!rlang::syms(meta_vars_short)), names_to = "variable", values_to = "amount"),
                    by = c(meta_vars_short,"variable","amount")) %>%
+  
+  ####### add new BAL gating
+   dplyr::full_join(list_of_datasets[["DCMonoNeut_BAL"]] %>%
+                     pivot_longer(cols = !c(!!!rlang::syms(meta_vars_short)), names_to = "variable", values_to = "amount") %>%
+                      dplyr::mutate(amount = as.numeric(amount)),
+                   by = c(meta_vars_short,"variable","amount")) %>%
+  
   
   ### fix typos, adjust for new Baseline naming (used to be week00)
   dplyr::mutate(TimePoint = str_replace_all(str_remove_all(Time," "), "Baseline","week00"),
@@ -3214,7 +3218,7 @@ curr_vtp_for_plot <- sort(unique(curr_vars_for_plot_df$var_time_comp)) #### incl
 comp <- "BAL"
 ```
 
-``` {r levels_ScatterplotWithBox, results = 'asis', fig.height = 14, fig.width = 8}
+``` {r levels_ScatterplotWithBox, results = 'asis', fig.height = 11, fig.width = 8}
  
     name_to_use <- paste0(fig_name,"_MW_",comp)
     curr_animals <- unique(curr_phen_long$Animal_ID[which(curr_phen_long$Compartment == comp)])
@@ -3421,7 +3425,7 @@ y.pos_to_use <- limits_to_use[1]
 ```{r setBAL___Mono, ref.label=c('setBAL')}
 ```
 
-``` {r levels_ScatterplotWithBox___BAL___Mono, ref.label=c('levels_ScatterplotWithBox'), results = 'asis', fig.height = 20, fig.width = 8}
+``` {r levels_ScatterplotWithBox___BAL___Mono, ref.label=c('levels_ScatterplotWithBox'), results = 'asis', fig.height = 14, fig.width = 8}
 ```
 
 ```{r setBlood___Mono, ref.label=c('setBlood')}
@@ -3505,6 +3509,83 @@ list_of_stats[[paste0("SFigS6_",shortName_for_wtBatch)]] <- paste0("see Fig3a, F
 list_of_stats[[paste0("SFigS7_",shortName_for_wtBatch)]] <- paste0("see Fig3a, Fig3b, Fig3c tabs for ",shortName_for_wtBatch)
 
 ```
+
+
+
+
+
+### Supp Fig X Alveolar Macrophages heatmap {.tabset}
+
+``` {r setVars___Macrophages}
+fig_name <- paste0("SuppFigX_",shortName_for_wtBatch)
+vars_to_use <- unique(phen_long$variable)[grepl("Macrophages",unique(phen_long$variable))]
+var_name <- "Macrophages"
+treatment_to_use <- "Triple_depletion"
+
+
+row_font_size <- 6
+row_font_size_trimmed <- 6
+levels_or_FC <- "levels"
+```
+
+
+```{r MW_3Group_levels_calculate___Macrophages, ref.label=c('MW_3Group_levels_calculate'), results='asis', fig.height=12, fig.width=7}
+```
+
+
+``` {r CellSubsets_levels_heatmap___Macrophages, ref.label=c('CellSubsets_levels_heatmap'), results = 'asis', fig.height = 6, fig.width = 8}
+```
+
+#### Scatterplots  {.tabset}
+
+```{r scat_setup_bulkPops___Macrophages}
+curr_vars_for_plot <- vars_to_use
+limits_to_use <- c(-10,100)
+breaks_to_use <- c(0,25,50,75,100)
+labels_to_use <- c(0,25,50,75,100)
+y.pos_to_use <- limits_to_use[1]
+```
+
+
+``` {r CellSubsets_levels_Scatterplot___Macrophages, ref.label=c('CellSubsets_levels_Scatterplot'), results = 'asis', fig.height = 12, fig.width = 7}
+```
+
+
+
+#### Scatterplots with box {.tabset}
+
+```{r scatBox_setup___Mac}
+
+#### set order for only those that are sig diff
+curr_vars_for_plot_df <- list_of_stats[[paste0(fig_name,"_MW_BAL_",levels_or_FC)]] %>%
+          dplyr::mutate(var_time_comp = paste0(variable_time,"__BAL")) %>%
+          dplyr::select(!!!rlang::syms(colnames(.))) %>%
+  ### filter to only sig by Chi vs WT
+  dplyr::filter(grepl("p < 0.05", TriMutvsTriWT_dir))
+
+curr_vtp_for_plot <- sort(unique(curr_vars_for_plot_df$var_time_comp)) #### includes time & compartment
+
+```
+
+
+```{r setBAL___Mac, ref.label=c('setBAL')}
+```
+
+``` {r levels_ScatterplotWithBox___BAL___Mac, ref.label=c('levels_ScatterplotWithBox'), results = 'asis', fig.height = 6, fig.width = 8}
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -3627,7 +3708,8 @@ contrast_name <- paste0("Fig4de_",shortName_for_wtBatch)
 
 ### which variable sets to compare
 ### first one is "xxx vs"
-vars_to_use1 <- c(DC_columns,monocyte_columns,neutrophil_columns)
+#vars_to_use1 <- c(DC_columns,monocyte_columns,neutrophil_columns)
+vars_to_use1 <- c(DC_columns,monocyte_columns,neutrophil_columns,unique(phen_long$variable)[grepl("Macrophages",unique(phen_long$variable))])
 var_name1 <- "CellSubsets"
 levels_or_BOTH1 <- "levels" ### if want to use levels or BOTH levels AND FC for varset1
 compartment_var1 <- "BAL"
@@ -4066,7 +4148,8 @@ group_list <- list("TripleOnly"=c("Triple_depletion__HTLV-1A_WT",
 
 ### which variable sets to compare
 ### first one is "xxx vs"
-vars_to_use1 <- c(DC_columns,monocyte_columns,neutrophil_columns)
+#vars_to_use1 <- c(DC_columns,monocyte_columns,neutrophil_columns)
+vars_to_use1 <- c(DC_columns,monocyte_columns,neutrophil_columns,unique(phen_long$variable)[grepl("Macrophages",unique(phen_long$variable))])
 var_name1 <- "CellSubsets"
 levels_or_BOTH1 <- "levels" ### if want to use levels or BOTH levels AND FC for varset1
 compartment_var1 <- "BAL"
