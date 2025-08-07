@@ -175,7 +175,7 @@ for(curr_tab in names(list_of_datasets)[grepl("monocytes",names(list_of_datasets
     ### fix variable names
     dplyr::mutate(variable = str_replace_all(variable,"%","Pct_"),
                   variable = str_replace_all(variable,"\\.","_"),
-                  variable = str_replace_all(variable,"MacrophagesIL","Macrophages_IL"),
+                 # variable = str_replace_all(variable,"MacrophagesIL","Macrophages_IL"),
                   variable = str_replace_all(variable,"Cd162","CD162"),
                   variable = str_replace_all(variable,"CD162","CD162_"),
                   variable = str_remove_all(variable,"\\+"),
@@ -377,7 +377,7 @@ virus_colors <- c("seagreen4","palegreen")
 # *Mann-Whitney/Wilcoxon test among levels for each pairwise group comparison*
 
 ### Fig panel 
-name_to_use <- paste0("Fig2c_",shortName_for_wtBatch)
+name_to_use <- paste0("Fig2c",shortName_for_wtBatch)
 levels_or_FC <- "levels"
 
  
@@ -637,7 +637,9 @@ MW_3Group_fxn <- function(tmp, name_to_use,levels_or_FC){
   ### save pvalues, NOTE NEED THE << to assign fromwithin the function
  
  list_of_stats[[paste0(name_to_use,"_",levels_or_FC)]] <<- p_value_df1 %>%
-   rownames_to_column("variable_time")
+   rownames_to_column("variable_time") %>%
+   ### remove columns with all na
+   dplyr::select(where(function(x) !all(is.na(x))))
  
 
  
@@ -957,7 +959,7 @@ list_of_plotted[[paste0(name_to_use)]] <- tmp2[,rownames(annotation_col)] %>% ro
 
 
 <!--     ### save values plotted -->
-<!-- list_of_plotted[[paste0("Fig2c_",shortName_for_wtBatch)]] <- phen_to_plot[,c("Animal_ID","Treatment","Virus",rownames(p_value_df2)[which(p_value_df2$TriMutvsTriWT_p_raw < 0.05)])] -->
+<!-- list_of_plotted[[paste0("Fig2c",shortName_for_wtBatch)]] <- phen_to_plot[,c("Animal_ID","Treatment","Virus",rownames(p_value_df2)[which(p_value_df2$TriMutvsTriWT_p_raw < 0.05)])] -->
 
 
 
@@ -1123,7 +1125,7 @@ dataVL3 <- dataVL2 %>%
 ### Fig 2d heatmap 
 
 
-```{r Fig2d_viralscoreHeatmap, results='asis', fig.width=10, fig.height=10, eval = eval_Fig2}
+```{r Fig2d_viralscoreHeatmap, results='asis', fig.width=12, fig.height=10, eval = eval_Fig2}
 name_prefix <- "Fig2dprep"
 #### plot each tp_score, fracVars_notZero and tp_comb_score for each animal/timepoint (8 points per animal)
 
@@ -1424,19 +1426,19 @@ gaps_df_columns <- data.frame(table(gaps_df_columns_prep$treat_vir)) %>%
 ### save combo to add to data
   viral_score_df <- curr_df3
   
-  list_of_plotted[[paste0("Fig2d_prep",shortName_for_wtBatch)]] <-  rbind(vs_scores_prep1,vs_scores_prep2[,colnames(vs_scores_prep1)]) %>%
+  list_of_plotted[[paste0("Fig2de_prep",shortName_for_wtBatch)]] <-  rbind(vs_scores_prep1,vs_scores_prep2[,colnames(vs_scores_prep1)]) %>%
     rownames_to_column("variable_time")
   
-    list_of_plotted[[paste0("Fig2de",shortName_for_wtBatch)]] <-  viral_score_df %>%
+    list_of_plotted[[paste0("Fig2d",shortName_for_wtBatch)]] <-  viral_score_df %>%
     rownames_to_column("variable_time")
 ```
   
 ### Fig 2e boxplot {.tabset}
 
 ``` {r Fig2e_summaryScoreBoxplot, results='asis', fig.width=5, fig.height=5, eval = eval_Fig2}
-name_prefix <- "Fig2de"
+name_prefix <- "Fig2e"
 long_name_to_use <- "BothSumSc"
- name_to_use <- paste0(name_prefix,"_",str_remove_all(long_name_to_use, " "),shortName_for_wtBatch)
+ name_to_use <- paste0("Fig2de_",str_remove_all(long_name_to_use, " "),shortName_for_wtBatch)
 p_value_df1 <- list_of_stats[[paste0(name_to_use,"_",levels_or_FC)]] %>%
   column_to_rownames("variable_time")
 
@@ -1590,7 +1592,7 @@ curr_TVB_values_df <- TVB_values_df %>%
   
   
       ### save values plotted
-list_of_plotted[[paste0("Fig2de",shortName_for_wtBatch)]] <- phen_to_plot[,c("Animal_ID","Treatment","Virus","COMBO")]
+list_of_plotted[[paste0("Fig2e",shortName_for_wtBatch)]] <- phen_to_plot[,c("Animal_ID","Treatment","Virus","COMBO")]
   
 
 ```
@@ -1649,7 +1651,7 @@ data_df_to_use <- data_df %>%
 
 ``` {r setVars}
 ### calcs are for both Supp Fig 2 and 4, then trim later
-fig_name <- paste0("SFig2a4_",shortName_for_wtBatch)
+fig_name <- paste0("SFig2a4",shortName_for_wtBatch)
 vars_to_use <- cellpop_columns
 var_name <- "cellpops_broad"
 ```
@@ -2151,7 +2153,7 @@ pval_combined <- dplyr::full_join(pval_cwt,pval_MWlevels, by = "rowname") %>%
   column_to_rownames("good")
 
 ### save as the trimmed FigS2 or S4
-list_of_stats[[paste0(fig_to_use)]] <- pval_combined %>%
+list_of_stats[[paste0(fig_to_use,"_pvalsPlotted")]] <- pval_combined %>%
   dplyr::mutate_all(~replace(., is.nan(.), "no variation"))
 
 ### also generate for dir to color the brackets
@@ -2439,7 +2441,7 @@ only p < 0.05 are shown for clarity
 
 
 ```{r SFig4_prep}
-fig_to_use <- paste0("SFigS4_",shortName_for_wtBatch)
+fig_to_use <- paste0("SFigS4",shortName_for_wtBatch)
 ###### select group/tp from CWT analysis
 ### treatment virus comp
 TVC_selected <- c("No_depletion__HTLV-1ACoI-L__Blood","Triple_depletion__HTLV-1ACoI-L__Blood","Triple_depletion__HTLV-1A_WT__Blood")
@@ -2646,7 +2648,7 @@ shape_values_to_use <- c(21,22,23,25,24,1,0,5,2,6,
 ### Fig 3a DCs heatmap {.tabset}
 
 ``` {r setVars___DCs}
-fig_name <- paste0("Fig3a_",shortName_for_wtBatch)
+fig_name <- paste0("Fig3a",shortName_for_wtBatch)
 vars_to_use <- DC_columns
 var_name <- "DCs"
 treatment_to_use <- "Triple_depletion"
@@ -2970,7 +2972,7 @@ hmo <- "by timepoint, dir, Assay"
     dplyr::relocate(Virus,Compartment,Treatment,Animal_ID) 
   
   
-  list_of_plotted[[paste0(fig_name,"_",comp,"_",shortName_for_wtBatch)]] <- to_save
+  list_of_plotted[[paste0(fig_name,"_",comp,"",shortName_for_wtBatch)]] <- to_save
   
   to_print <- to_save %>%
     DT::datatable(extensions = 'Buttons',
@@ -3375,7 +3377,7 @@ comp <- "Blood"
 ### Fig 3b Monocytes heatmap {.tabset}
 
 ``` {r setVars___Monocytes}
-fig_name <- paste0("Fig3b_",shortName_for_wtBatch)
+fig_name <- paste0("Fig3b",shortName_for_wtBatch)
 vars_to_use <- monocyte_columns
 var_name <- "monocytes"
 treatment_to_use <- "Triple_depletion"
@@ -3397,13 +3399,11 @@ levels_or_FC <- "levels"
 #### Scatterplots  {.tabset}
 
 ```{r scat_setup_bulkPops___Monocytes}
-mac_vars <- unique(curr_phen_long$variable)[grepl("Macrophages",unique(curr_phen_long$variable))]
-nonmac_vars <- setdiff(unique(curr_phen_long$variable),mac_vars)
+curr_vars_prep <- unique(curr_phen_long$variable)
 curr_vars_for_plot <- c("Pct_Monocytes","Pct_Classical","Pct_Intermediate","Pct_Nonclassical",
-                        sort(nonmac_vars[grepl("_TNFa",nonmac_vars)]),
-                        sort(nonmac_vars[grepl("_IL8",nonmac_vars)]),
-                        sort(nonmac_vars[grepl("_IL10",nonmac_vars)]),
-                        mac_vars)
+                        sort(curr_vars_prep[grepl("_TNFa",curr_vars_prep)]),
+                        sort(curr_vars_prep[grepl("_IL8",curr_vars_prep)]),
+                        sort(curr_vars_prep[grepl("_IL10",curr_vars_prep)]))
 limits_to_use <- c(-10,100)
 breaks_to_use <- c(0,25,50,75,100)
 labels_to_use <- c(0,25,50,75,100)
@@ -3438,7 +3438,7 @@ y.pos_to_use <- limits_to_use[1]
 ### Fig 3c Neutrophils heatmap {.tabset}
 
 ``` {r setVars___Neutrophils}
-fig_name <- paste0("Fig3c_",shortName_for_wtBatch)
+fig_name <- paste0("Fig3c",shortName_for_wtBatch)
 vars_to_use <- neutrophil_columns
 var_name <- "neutrophils"
 treatment_to_use <- "Triple_depletion"
@@ -3502,76 +3502,12 @@ y.pos_to_use <- limits_to_use[1]
 
 
 ```{r addSuppFigS6andFigS7}
-list_of_plotted[[paste0("SFigS6_",shortName_for_wtBatch)]] <- paste0("see Fig3a, Fig3b, Fig3c tabs for ",shortName_for_wtBatch)
-list_of_plotted[[paste0("SFigS7_",shortName_for_wtBatch)]] <- paste0("see Fig3a, Fig3b, Fig3c tabs for ",shortName_for_wtBatch)
+list_of_plotted[[paste0("SFigS6",shortName_for_wtBatch)]] <- paste0("see Fig3a, Fig3b, Fig3c tabs ",shortName_for_wtBatch)
+list_of_plotted[[paste0("SFigS7",shortName_for_wtBatch)]] <- paste0("see Fig3a, Fig3b, Fig3c tabs ",shortName_for_wtBatch)
 
-list_of_stats[[paste0("SFigS6_",shortName_for_wtBatch)]] <- paste0("see Fig3a, Fig3b, Fig3c tabs for ",shortName_for_wtBatch)
-list_of_stats[[paste0("SFigS7_",shortName_for_wtBatch)]] <- paste0("see Fig3a, Fig3b, Fig3c tabs for ",shortName_for_wtBatch)
+list_of_stats[[paste0("SFigS6",shortName_for_wtBatch)]] <- paste0("see Fig3a, Fig3b, Fig3c tabs ",shortName_for_wtBatch)
+list_of_stats[[paste0("SFigS7",shortName_for_wtBatch)]] <- paste0("see Fig3a, Fig3b, Fig3c tabs ",shortName_for_wtBatch)
 
-```
-
-
-
-
-
-### Supp Fig X Alveolar Macrophages heatmap {.tabset}
-
-``` {r setVars___Macrophages}
-fig_name <- paste0("SuppFigX_",shortName_for_wtBatch)
-vars_to_use <- unique(phen_long$variable)[grepl("Macrophages",unique(phen_long$variable))]
-var_name <- "Macrophages"
-treatment_to_use <- "Triple_depletion"
-
-
-row_font_size <- 6
-row_font_size_trimmed <- 6
-levels_or_FC <- "levels"
-```
-
-
-```{r MW_3Group_levels_calculate___Macrophages, ref.label=c('MW_3Group_levels_calculate'), results='asis', fig.height=12, fig.width=7}
-```
-
-
-``` {r CellSubsets_levels_heatmap___Macrophages, ref.label=c('CellSubsets_levels_heatmap'), results = 'asis', fig.height = 6, fig.width = 8}
-```
-
-#### Scatterplots  {.tabset}
-
-```{r scat_setup_bulkPops___Macrophages}
-curr_vars_for_plot <- vars_to_use
-limits_to_use <- c(-10,100)
-breaks_to_use <- c(0,25,50,75,100)
-labels_to_use <- c(0,25,50,75,100)
-y.pos_to_use <- limits_to_use[1]
-```
-
-
-``` {r CellSubsets_levels_Scatterplot___Macrophages, ref.label=c('CellSubsets_levels_Scatterplot'), results = 'asis', fig.height = 12, fig.width = 7}
-```
-
-
-
-#### Scatterplots with box {.tabset}
-
-```{r scatBox_setup___Mac}
-
-#### set order for only those that are sig diff
-curr_vars_for_plot_df <- list_of_stats[[paste0(fig_name,"_MW_BAL_",levels_or_FC)]] %>%
-          dplyr::mutate(var_time_comp = paste0(variable_time,"__BAL")) %>%
-          dplyr::select(!!!rlang::syms(colnames(.))) %>%
-  ### filter to only sig by Chi vs WT
-  dplyr::filter(grepl("p < 0.05", TriMutvsTriWT_dir))
-
-curr_vtp_for_plot <- sort(unique(curr_vars_for_plot_df$var_time_comp)) #### includes time & compartment
-
-```
-
-
-```{r setBAL___Mac, ref.label=c('setBAL')}
-```
-
-``` {r levels_ScatterplotWithBox___BAL___Mac, ref.label=c('levels_ScatterplotWithBox'), results = 'asis', fig.height = 6, fig.width = 8}
 ```
 
 
@@ -3600,7 +3536,7 @@ curr_vtp_for_plot <- sort(unique(curr_vars_for_plot_df$var_time_comp)) #### incl
 ### Fig 4abc Cytokines heatmaps {.tabset}
 
 ``` {r setVars___cytokines}
-fig_name <- paste0("Fig4abc_",shortName_for_wtBatch)
+fig_name <- paste0("Fig4abc",shortName_for_wtBatch)
 vars_to_use <- cytokine_columns
 var_name <- "cytokines"
 treatment_to_use <- "Triple_depletion"
@@ -3640,9 +3576,9 @@ levels_or_FC <- "levels"
 
 
 ```{r addSuppFigS8}
-list_of_plotted[[paste0("SFigS8_",shortName_for_wtBatch)]] <- paste0("see Fig4abc tabs for ",shortName_for_wtBatch)
+list_of_plotted[[paste0("SFigS8",shortName_for_wtBatch)]] <- paste0("see Fig4abc tabs ",shortName_for_wtBatch)
 
-list_of_stats[[paste0("SFigS8_",shortName_for_wtBatch)]] <- paste0("see Fig4abc tabs for ",shortName_for_wtBatch)
+list_of_stats[[paste0("SFigS8",shortName_for_wtBatch)]] <- paste0("see Fig4abc tabs ",shortName_for_wtBatch)
 ```
 
 
@@ -3650,7 +3586,7 @@ list_of_stats[[paste0("SFigS8_",shortName_for_wtBatch)]] <- paste0("see Fig4abc 
 ### Cytokines: vs No Depletion (Supp Fig 9) {.tabset}
 
 ```{r setVars_Cytokines_vsNoDep}
-fig_name <- paste0("SFig9_cytvNoD_",shortName_for_wtBatch)
+fig_name <- paste0("SFig9_cytvNoD",shortName_for_wtBatch)
 vars_to_use <- cytokine_columns
 var_name <- "cytokines"
 treatment_to_use <- c("No_depletion","Triple_depletion")
@@ -3689,7 +3625,7 @@ curr_treat_virus_factor_levels <- c("No_depletion__HTLV-1ACoI-L","Triple_depleti
 ```
 
 
-## Associations between sig different cytokines & cell subsets (Fig 4de)  {.tabset}
+## Associations between sig different cytokines & cell subsets (Fig 4def)  {.tabset}
 
 Animals in correlations: `r paste(unique(phen_long_to_use$Animal_ID))`
 
@@ -3704,12 +3640,12 @@ group_list <- list("TripleOnly"=c("Triple_depletion__HTLV-1A_WT",
 
 
 
-contrast_name <- paste0("Fig4de_",shortName_for_wtBatch)
+contrast_name <- paste0("Fig4def",shortName_for_wtBatch)
 
 ### which variable sets to compare
 ### first one is "xxx vs"
 #vars_to_use1 <- c(DC_columns,monocyte_columns,neutrophil_columns)
-vars_to_use1 <- c(DC_columns,monocyte_columns,neutrophil_columns,unique(phen_long$variable)[grepl("Macrophages",unique(phen_long$variable))])
+vars_to_use1 <- c(DC_columns,monocyte_columns,neutrophil_columns)
 var_name1 <- "CellSubsets"
 levels_or_BOTH1 <- "levels" ### if want to use levels or BOTH levels AND FC for varset1
 compartment_var1 <- "BAL"
@@ -3720,7 +3656,7 @@ levels_or_BOTH2 <- "levels" ### if want to use levels or BOTH levels AND FC for 
 compartment_var2 <- "BAL"
 
 #### get sig diff cytokines
-sig_diff_cytokines <- list_of_stats[[paste0("Fig4abc_",shortName_for_wtBatch,"_MW_",compartment_var2,"_",levels_or_BOTH2)]] %>%
+sig_diff_cytokines <- list_of_stats[[paste0("Fig4abc",shortName_for_wtBatch,"_MW_",compartment_var2,"_",levels_or_BOTH2)]] %>%
   dplyr::filter(TriMutvsTriWT_p_raw < 0.05)
 vars_to_use2 <- sig_diff_cytokines$variable_time
 #vars_to_use2 <- unique(str_before_first(sig_diff_cytokines$variable_time,"xx__"))
@@ -3938,12 +3874,12 @@ corr_perTimepoint_vsOther_fxn <- function(group_name,
       ### save correlation matrix, raw pvalues, adjusted pvalues
       list_of_corr <- list("corr_coef" = cor_mat, "p_raw" = cor_test_mat, "p_adj" = cor_test_adj_mat)
       openxlsx::write.xlsx(list_of_corr, file = file.path(outputTABLES_dir,
-                                                          paste0(params$study_name,"_Corr",var_name1,"Vs",var_name2,"_",shortName_for_wtBatch,"_",tp,"_",group_name,"_",curr_ds,"_",method_to_use,"_CoefPvals.xlsx")),
+                                                          paste0(params$study_name,"_Corr",var_name1,"Vs",var_name2,"",shortName_for_wtBatch,"_",tp,"_",group_name,"_",curr_ds,"_",method_to_use,"_CoefPvals.xlsx")),
                            rowNames=T)
 
       ### also save as rdata to be able to access quickly
       save(cor_mat, cor_test_mat, cor_test_adj_mat, file = file.path(outputRData_dir,
-                                                                     paste0(params$study_name,"_Corr",var_name1,"Vs",var_name2,"_",shortName_for_wtBatch,"_",tp,"_",group_name,"_",curr_ds,"_",method_to_use,"_CoefPvals.RData")))
+                                                                     paste0(params$study_name,"_Corr",var_name1,"Vs",var_name2,"",shortName_for_wtBatch,"_",tp,"_",group_name,"_",curr_ds,"_",method_to_use,"_CoefPvals.RData")))
 
 
       
@@ -3976,15 +3912,15 @@ corr_perTimepoint_vsOther_fxn <- function(group_name,
     ### if not available will save the empty matrices
     list_of_corr <- list("corr_coef" = cor_mat_combo, "p_raw" = cor_test_mat_combo, "num_animals"=num_animals_df)
     openxlsx::write.xlsx(list_of_corr, file = file.path(outputTABLES_dir, 
-                                                        paste0(params$study_name,"_Corr",var_name1,"Vs",var_name2,"_",shortName_for_wtBatch,"_comboTP_",group_name,"_",curr_ds,"_",method_to_use,"_CoefPvals.xlsx")),
+                                                        paste0(params$study_name,"_Corr",var_name1,"Vs",var_name2,"",shortName_for_wtBatch,"_comboTP_",group_name,"_",curr_ds,"_",method_to_use,"_CoefPvals.xlsx")),
                          rowNames=T)
     
     ### also save as rdata to be able to access quickly
     save(cor_mat_combo, cor_test_mat_combo, num_animals_df, file = file.path(outputRData_dir, 
-                                                                             paste0(params$study_name,"_Corr_",var_name1,"Vs",var_name2,"_",shortName_for_wtBatch,"_comboTP_",group_name,"_",curr_ds,"_",method_to_use,"_CoefPvals.RData")))
+                                                                             paste0(params$study_name,"_Corr_",var_name1,"Vs",var_name2,"",shortName_for_wtBatch,"_comboTP_",group_name,"_",curr_ds,"_",method_to_use,"_CoefPvals.RData")))
     
     saveRDS(timepoints_with_both, file = file.path(outputRData_dir, 
-                                                                             paste0(params$study_name,"_Corr_",var_name1,"Vs",var_name2,"_",shortName_for_wtBatch,"_numTPsBoth_",group_name,"_",curr_ds,"_",method_to_use,"_CoefPvals.rds")))
+                                                                             paste0(params$study_name,"_Corr_",var_name1,"Vs",var_name2,"",shortName_for_wtBatch,"_numTPsBoth_",group_name,"_",curr_ds,"_",method_to_use,"_CoefPvals.rds")))
     
   }
   
@@ -4063,7 +3999,7 @@ var_name2 <- "ChiVsWT_Cytokines_inBAL"
 levels_or_BOTH2 <- "levels" ### if want to use levels or BOTH levels AND FC for varset1
 compartment_var2 <- "BAL"
 #### get sig diff cytokines
-sig_diff_cytokines <- list_of_stats[[paste0("Fig4abc_",shortName_for_wtBatch,"_MW_",compartment_var2,"_",levels_or_BOTH2)]] %>%
+sig_diff_cytokines <- list_of_stats[[paste0("Fig4abc",shortName_for_wtBatch,"_MW_",compartment_var2,"_",levels_or_BOTH2)]] %>%
   dplyr::filter(TriMutvsTriWT_p_raw < 0.05)
 vars_to_use2 <- sig_diff_cytokines$variable_time
 #vars_to_use2 <- unique(str_before_first(sig_diff_cytokines$variable_time,"xx__"))
@@ -4112,7 +4048,7 @@ var_name2 <- "ChiVsWT_Cytokines_inBlood"
 levels_or_BOTH2 <- "levels" ### if want to use levels or BOTH levels AND FC for varset1
 compartment_var2 <- "Blood"
 #### get sig diff cytokines
-sig_diff_cytokines <- list_of_stats[[paste0("Fig4abc_",shortName_for_wtBatch,"_MW_",compartment_var2,"_",levels_or_BOTH2)]] %>%
+sig_diff_cytokines <- list_of_stats[[paste0("Fig4abc",shortName_for_wtBatch,"_MW_",compartment_var2,"_",levels_or_BOTH2)]] %>%
   dplyr::filter(TriMutvsTriWT_p_raw < 0.05)
 vars_to_use2 <- sig_diff_cytokines$variable_time
 #vars_to_use2 <- unique(str_before_first(sig_diff_cytokines$variable_time,"xx__"))
@@ -4149,7 +4085,7 @@ group_list <- list("TripleOnly"=c("Triple_depletion__HTLV-1A_WT",
 ### which variable sets to compare
 ### first one is "xxx vs"
 #vars_to_use1 <- c(DC_columns,monocyte_columns,neutrophil_columns)
-vars_to_use1 <- c(DC_columns,monocyte_columns,neutrophil_columns,unique(phen_long$variable)[grepl("Macrophages",unique(phen_long$variable))])
+vars_to_use1 <- c(DC_columns,monocyte_columns,neutrophil_columns)
 var_name1 <- "CellSubsets"
 levels_or_BOTH1 <- "levels" ### if want to use levels or BOTH levels AND FC for varset1
 compartment_var1 <- "BAL"
@@ -4160,7 +4096,7 @@ levels_or_BOTH2 <- "levels" ### if want to use levels or BOTH levels AND FC for 
 compartment_var2 <- "Blood"
 
 #### get sig diff cytokines
-sig_diff_cytokines <- list_of_stats[[paste0("Fig4abc_",shortName_for_wtBatch,"_MW_",compartment_var2,"_",levels_or_BOTH2)]] %>%
+sig_diff_cytokines <- list_of_stats[[paste0("Fig4abc",shortName_for_wtBatch,"_MW_",compartment_var2,"_",levels_or_BOTH2)]] %>%
   dplyr::filter(TriMutvsTriWT_p_raw < 0.05)
 vars_to_use2 <- sig_diff_cytokines$variable_time
 #vars_to_use2 <- unique(str_before_first(sig_diff_cytokines$variable_time,"xx__"))
@@ -4221,7 +4157,7 @@ for(i in 1:length(group_list)){
     compartment_var2 <- compartments_df$comp_cytokines[comp_row]
     
     ##### format is var_time
-    sig_diff_cytokines <- list_of_stats[[paste0("Fig4abc_",shortName_for_wtBatch,"_MW_",compartment_var2,"_",levels_or_BOTH2)]] %>%
+    sig_diff_cytokines <- list_of_stats[[paste0("Fig4abc",shortName_for_wtBatch,"_MW_",compartment_var2,"_",levels_or_BOTH2)]] %>%
   dplyr::filter(TriMutvsTriWT_p_raw < 0.05)
     
     
@@ -4235,7 +4171,7 @@ for(i in 1:length(group_list)){
 
     #### load which timepoints have
     timepoints_with_both <- readRDS(file = file.path(outputRData_dir, 
-                                                     paste0(params$study_name,"_Corr_",var_name1,"Vs",var_name2,"_",shortName_for_wtBatch,"_numTPsBoth_",group_name,"_",curr_ds,"_",method_to_use,"_CoefPvals.rds")))
+                                                     paste0(params$study_name,"_Corr_",var_name1,"Vs",var_name2,"",shortName_for_wtBatch,"_numTPsBoth_",group_name,"_",curr_ds,"_",method_to_use,"_CoefPvals.rds")))
     
     
     
@@ -4243,8 +4179,8 @@ for(i in 1:length(group_list)){
     for(tp in timepoints_with_both){
       
       
-      Corr_Name <- paste0(params$study_name,"_Corr",var_name1,"Vs",var_name2,"_",shortName_for_wtBatch,"_",tp,"_",group_name,"_",curr_ds)
-      Corr_Name_combo <- paste0(params$study_name,"_Corr_",var_name1,"Vs",var_name2,"_",shortName_for_wtBatch,"_comboTP_",group_name,"_",curr_ds)
+      Corr_Name <- paste0(params$study_name,"_Corr",var_name1,"Vs",var_name2,"",shortName_for_wtBatch,"_",tp,"_",group_name,"_",curr_ds)
+      Corr_Name_combo <- paste0(params$study_name,"_Corr_",var_name1,"Vs",var_name2,"",shortName_for_wtBatch,"_comboTP_",group_name,"_",curr_ds)
       
       groups_of_interest1 <- paste0(group_list[[i]],"__",compartment_var1)
   groups_of_interest2 <- paste0(group_list[[i]],"__",compartment_var2)
@@ -4351,6 +4287,7 @@ compile associations with p < `r paste0(set_p_cut_corr)`
 ```{r virusInLung_prep}
 vlung_df_to_use <- list_of_datasets[["Virus_Lung_variables"]]
 name_to_use <- "including TiT"
+fig_name_to_use <- "Fig6"
 short_name_to_use <- "wTiT"
 ```
 
@@ -4465,7 +4402,7 @@ full_df <- vlung_df_long %>%
                                  paste0("ChiVsWT_dir"))
         
 ###### save stats
-        list_of_stats[[paste0("MW_Lung",short_name_to_use)]] <- curr_p_df
+        list_of_stats[[paste0(fig_name_to_use,"_MW_Lung",short_name_to_use)]] <- curr_p_df
 
 #### collect data to plot
 df_for_plot <- vlung_df_long %>%
@@ -4582,7 +4519,8 @@ for(hmo in names(hm_orders_to_use)){
  cat("\n")
   cat(' \n \n') ### this is the key!
 
-    list_of_plotted[[paste0("hm_Lung",short_name_to_use)]] <- df_for_plot
+    list_of_plotted[[paste0(fig_name_to_use,"_",short_name_to_use)]] <- df_for_plot %>%
+      rownames_to_column("variable")
 
   
 
@@ -4684,7 +4622,8 @@ full_df <- list_of_datasets[["Olink_invitro"]] %>%
   
   ### save pvalues
  
- list_of_stats[[paste0(name_to_use,"_",levels_or_FC)]] <- p_value_df1 
+ list_of_stats[[paste0(name_to_use,"_",levels_or_FC)]] <- p_value_df1 %>%
+   rownames_to_column("variable")
  
 ################## heatmap
  
@@ -4703,7 +4642,8 @@ full_df <- list_of_datasets[["Olink_invitro"]] %>%
   
 ########### prep for heatmap:
 #### columns = samples, rows = assay/timepoint
- p_value_df1 <- list_of_stats[[paste0(name_to_use,"_",levels_or_FC)]] 
+ p_value_df1 <- list_of_stats[[paste0(name_to_use,"_",levels_or_FC)]]  %>%
+   column_to_rownames("variable") 
   sig_assay_df <- p_value_df1 %>%
     rownames_to_column() %>%
     ### add factored dir
