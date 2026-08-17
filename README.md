@@ -1,7 +1,7 @@
 This repo contains the raw data and code used to produce the figures in the manuscript
 
 ### High expression of Rex-orf-I and HBZ mRNAs and bronchiectasis in lung of HTLV-1A/C infected macaques 
-Sarkis et al. 2025 Nat Comm 
+Sarkis et al. 2025 Nat Comm https://pubmed.ncbi.nlm.nih.gov/41006234/
 
 - raw datasets used can be found in input_data/ccrvb39_batch1and2_RAW_datasets.xlsx
 
