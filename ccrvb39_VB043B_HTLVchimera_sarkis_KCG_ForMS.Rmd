@@ -8,31 +8,23 @@ output:
 editor_options:
   chunk_output_type: console
 params:
-  study_name: "ccrvb39_VB043B_HTLVchimera_sarkis"
   #   ##### where is the data on biowulf
+ 
+  study_name: "ccrvb39_VB043B_HTLVchimera_sarkis"
   parent_dir: "~/../../Volumes/NCI_VB/franchini/ccrvb39_VB043B_HTLVchimera_sarkis_KCG/trimmedForMS_Sept2024"
-  input_dir: "~/../../Volumes/NCI_VB/franchini/ccrvb39_VB043B_HTLVchimera_sarkis_KCG/trimmedForMS_Sept2024/input_data"
-
-
-  #   ##### where is the data local
-  # parent_dir: "/Users/goldfarbmurenkc/Documents/VeffaFranchini/ccrvb39_VB043B_HTLVchimera_sarkis/ccrvb39_forBiowulfDown_20240919"
-  # input_dir: "/Users/goldfarbmurenkc/Documents/VeffaFranchini/ccrvb39_VB043B_HTLVchimera_sarkis/ccrvb39_forBiowulfDown_20240919/input_data"
-  
+  input_dir: "~/../../Volumes/NCI_VB/franchini/ccrvb39_VB043B_HTLVchimera_sarkis_KCG/trimmedForMS_Sept2024/input_data" ### includes fixed typo in DHF6 as of 6/12/26
  
  #### should evaluate Fig 2 viral scores or skip?
-  eval_Fig2: TRUE
   # ### WT batch(es) to use
-  # batchA_to_use: !r c("batch2") #!r c("batch1","batch2")
   # ### AC batch(es) to use
+  eval_Fig2: TRUE
+  # batchA_to_use: !r c("batch2") #!r c("batch1","batch2")
   # batchC_to_use: !r c("batch1","batch2") #!r c("batch1","batch2")
- 
   ##### should evaluate the corr calcs or are these already done?
   eval_corr_calcs: TRUE
-
   pval_cutoff: "0.05" 
   png_or_pdf: "png" #png or cairo_pdf for weird fonts
   lib_loc_to_use: "/data/goldfarbmurenkc/R/rhel8/4.3/"
-
 ---
 
 
